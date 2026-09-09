@@ -1,0 +1,2 @@
+import mongoose,{Schema} from 'mongoose'; export const ROLES=['TESTER','REVIEWER','ADMIN'] as const; export type Role=typeof ROLES[number];
+const schema=new Schema({firstName:{type:String,required:true,trim:true},lastName:{type:String,required:true,trim:true},email:{type:String,required:true,unique:true,lowercase:true,trim:true},passwordHash:{type:String,required:true,select:false},role:{type:String,enum:ROLES,default:'TESTER'},isActive:{type:Boolean,default:true}},{timestamps:true}); export const User=mongoose.model('User',schema);
