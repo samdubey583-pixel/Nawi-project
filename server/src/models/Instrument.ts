@@ -1,0 +1,36 @@
+import { Schema, model } from 'mongoose';
+
+const instrumentSchema = new Schema({
+  registeredBy: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  manufacturer: { type: String, required: true, trim: true },
+  typeDesignation: { type: String, required: true, trim: true },
+  serialNumber: { type: String, required: true, trim: true, unique: true, index: true },
+  accuracyClass: { type: String, enum: ['Class I', 'Class II', 'Class III', 'Class IIII'], required: true },
+  indicationType: { type: String, enum: ['Self-indicating', 'Semi-self-indicating', 'Non-self-indicating'], required: true },
+  zeroSettingMethod: { type: String, enum: ['Non-automatic', 'Semi-automatic', 'Automatic'] },
+  zeroTracking: { type: Boolean },
+  zeroIndicatingDevice: { type: Boolean },
+  digitalIndication: { type: Boolean },
+  unit: { type: String, enum: ['mg', 'g', 'kg', 't'], default: 'g' },
+  min: { type: Number, required: true, min: 0 },
+  max: { type: Number, required: true, min: 0 },
+  e: { type: Number, required: true, min: 0 },
+  d: { type: Number, required: true, min: 0 },
+  n: { type: Number, required: true, min: 1 },
+  softwareVersion: { type: String, default: '' },
+  loadCellInformation: { type: String, default: '' },
+  interfaces: { type: String, default: '' },
+  additionalInformation: { type: String, default: '' },
+  rangeType: { type: String, enum: ['single-range', 'multiple-range'], required: true },
+  intervalType: { type: String, enum: ['single-interval', 'multi-interval'], required: true },
+  tareDevice: { type: String, enum: ['Yes', 'No'], required: true },
+  multipleIndicatingDevices: { type: Boolean, required: true },
+  loadReceptorType: { type: String, enum: ['normal platform', 'other / special configuration'], required: true },
+  numberOfSupportPoints: { type: Number, min: 0 },
+  usesElectricPower: { type: Boolean, required: true },
+  powerSupplyType: { type: String, enum: ['AC mains', 'DC / battery', 'Other', 'Not specified'], required: true },
+  mobileInstrument: { type: Boolean, required: true },
+  portableRoadVehicleInstrument: { type: Boolean, required: true },
+}, { timestamps: true, collection: 'instruments' });
+
+export const Instrument = model('Instrument', instrumentSchema);
