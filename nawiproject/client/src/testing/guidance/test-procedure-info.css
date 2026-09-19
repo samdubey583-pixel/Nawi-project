@@ -1,0 +1,19 @@
+.test-procedure-info { margin-top: 24px; border-top: 1px solid #dfd3c2; color: #55483b; }
+.test-procedure-info > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 2px 12px; cursor: pointer; list-style: none; color: #76502f; font-size: 0.82rem; font-weight: 700; letter-spacing: .02em; }
+.test-procedure-info > summary::-webkit-details-marker { display: none; }
+.test-procedure-summary-label { display: inline-flex; align-items: center; gap: 8px; }
+.test-procedure-chevron { transition: transform 160ms ease; }
+.test-procedure-info[open] .test-procedure-chevron { transform: rotate(180deg); }
+.test-procedure-body { padding: 4px 16px 16px; border: 1px solid #e5dacb; border-radius: 12px; background: #fffdf9; box-shadow: 0 4px 14px rgba(95, 67, 39, .05); }
+.test-procedure-body section { padding: 13px 0; }
+.test-procedure-body section + section { border-top: 1px solid #eee6dc; }
+.test-procedure-eyebrow { display: block; margin-bottom: 6px; color: #a06f42; font-size: .68rem; font-weight: 800; letter-spacing: .11em; }
+.test-procedure-body p, .test-procedure-body li { max-width: 78ch; margin: 0; color: #695c4e; font-size: .84rem; line-height: 1.55; }
+.test-procedure-body ol, .test-procedure-body ul { margin: 0; padding-left: 21px; }
+.test-procedure-body li + li { margin-top: 5px; }
+.test-procedure-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+.test-procedure-reference { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.test-procedure-reference .test-procedure-eyebrow { flex-basis: 100%; }
+.test-procedure-reference a { display: inline-flex; align-items: center; gap: 5px; color: #865a35; font-size: .8rem; font-weight: 700; text-decoration: none; }
+.test-procedure-reference a:hover, .test-procedure-info > summary:hover { color: #5f3d22; }
+@media (max-width: 680px) { .test-procedure-grid { grid-template-columns: 1fr; } .test-procedure-body { padding-inline: 13px; } }

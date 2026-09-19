@@ -1,0 +1,2 @@
+/* Feature styles are intentionally centralized in client/src/styles/globals.css. */
+/* This import anchor keeps ownership with the feature without reintroducing a second color system. */
