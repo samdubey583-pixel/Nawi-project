@@ -16,6 +16,30 @@ import { calculateChangeoverError, calculateZeroError } from '../services/weighi
 import { ZeroCheckingTest } from '../models/ZeroCheckingTest.js';
 import { ZeroSettingBeforeLoadingTest } from '../models/ZeroSettingBeforeLoadingTest.js';
 import { sourceFingerprint, sourcePhaseFromTest, sourcePhaseIsComplete } from '../services/zeroSettingBeforeLoading.js';
+import { TareTest } from '../models/TareTest.js';
+import { calculateNetLoad, generateTareLoadPlan, tareSettingAccuracyResult } from '../services/tareCalculations.js';
+import { validateScaleIntervals } from '../services/scaleInterval.js';
+import { EccentricityTest } from '../models/EccentricityTest.js';
+import { MultipleIndicatingDeviceTest } from '../models/MultipleIndicatingDeviceTest.js';
+import { deriveMultipleIndicatingComparisons, MULTIPLE_INDICATING_RULE_REFERENCE, MULTIPLE_INDICATING_SOURCE, MULTIPLE_INDICATING_TEST_VERSION, sourceFingerprint as multipleIndicatingSourceFingerprint } from '../services/multipleIndicatingDevices.js';
+import { calculationForPosition, eccentricityFingerprint, eccentricityPositions, ECCENTRICITY_SOURCE, ECCENTRICITY_TEST_VERSION } from '../services/eccentricity.js';
+import { discriminationFingerprint, discriminationStages, evaluateDiscriminationObservation, DISCRIMINATION_RULE_REFERENCE, DISCRIMINATION_SOURCE, DISCRIMINATION_TEST_VERSION } from '../services/discrimination.js';
+import { DiscriminationTest } from '../models/DiscriminationTest.js';
+import { SensitivityTest } from '../models/SensitivityTest.js';
+import { evaluateSensitivityObservation, requiredExtraLoad, requiredPermanentDisplacement, sensitivityFingerprint, sensitivityStages, SENSITIVITY_DISPLACEMENT_RULE, SENSITIVITY_MPE_RULE, SENSITIVITY_SOURCE, SENSITIVITY_TEST_VERSION } from '../services/sensitivity.js';
+import { RepeatabilityTest } from '../models/RepeatabilityTest.js';
+import { calculateRepeatabilityObservation, evaluateRepeatabilityResults, getRepeatabilityPlan, repeatabilityFingerprint, REPEATABILITY_RULE_REFERENCE, REPEATABILITY_SOURCE, REPEATABILITY_TEST_VERSION, type RepeatabilityControlStage } from '../services/repeatability.js';
+import { VariationWithTimeTest } from '../models/VariationWithTimeTest.js';
+import { StabilityOfEquilibriumTest } from '../models/StabilityOfEquilibriumTest.js';
+import { calculateVariationMpe, evaluateCreep, evaluateZeroReturn, variationWithTimeFingerprint, variationWithTimePlan, VARIATION_WITH_TIME_ENGINE_VERSION, VARIATION_WITH_TIME_SOURCE, VARIATION_WITH_TIME_TEST_VERSION, type VariationWithTimeCheckpoint } from '../services/variationWithTime.js';
+import { evaluateDocumentationReview, evaluateInhibition, evaluateStabilitySequence, stabilityFingerprint, stabilityPlan, STABILITY_ENGINE_VERSION, STABILITY_REPETITIONS, STABILITY_RULE_SET, STABILITY_SOURCE, STABILITY_TEST_VERSION, normalizeMass, type StabilityOperation } from '../services/stabilityOfEquilibrium.js';
+import { testerReportAccessFilter, hasTesterReportAccess } from '../services/reportAccess.js';
+import { InfluenceFactorsTest } from '../models/InfluenceFactorsTest.js';
+import { evaluateInfluenceFactors, influenceFactorsFingerprint, influenceFactorsPlan, calculateInfluenceFactorsError, evaluateInfluenceFactorsCompliance, INFLUENCE_FACTORS_ENGINE_VERSION, INFLUENCE_FACTORS_RULE_SET, INFLUENCE_FACTORS_SOURCE, INFLUENCE_FACTORS_TEST_VERSION } from '../services/influenceFactors.js';
+import { EnduranceTest } from '../models/EnduranceTest.js';
+import { assessDurability, calculateEnduranceWeighing, enduranceApplicability, enduranceFingerprint, endurancePlan, ENDURANCE_CHECKPOINTS, ENDURANCE_ENGINE_VERSION, ENDURANCE_RULE_SET, ENDURANCE_SOURCE, ENDURANCE_TARGET_CYCLES, ENDURANCE_TEST_VERSION, nextCycleCount } from '../services/endurance.js';
+import { applicationMetadataValidationMessage, canEditReportMetadata, normalizeIndianPhone } from '../services/reportMetadata.js';
+import { deriveZeroIndicatorIncrement, validateSignedZeroRanges, validateZeroIndicatorObservations, type ZeroIndicatorObservationInput } from '../services/zeroIndicatorObservations.js';
 
 const r = Router();
 const text = z.string().trim().min(1);
@@ -23,6 +47,7 @@ const num = z.number().finite().optional();
 
 const schema = z.object({
   instrumentId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
+  controlStage: z.enum(['TYPE_APPROVAL', 'VERIFICATION']).optional().default('VERIFICATION'),
   applicationNumber: z.string().trim().optional(),
   externalApplicationReference: z.string().trim().optional(),
   referenceSource: z.enum(['generated', 'external']).optional(),
@@ -54,6 +79,7 @@ const schema = z.object({
     zeroSettingDevice: z.string().optional().default(''),
     tareDevice: z.enum(['Yes', 'No']).optional(),
     rangeType: z.enum(['single-range', 'multiple-range']).optional(),
+    tareDevicePresent: z.boolean().optional(), tareType: z.enum(['SUBTRACTIVE', 'ADDITIVE']).optional(), maximumTareEffect: z.object({ value: z.number().finite().positive(), unit: z.enum(['mg', 'g', 'kg', 't']) }).optional(), tareOperationMode: z.enum(['NON_AUTOMATIC', 'SEMI_AUTOMATIC', 'AUTOMATIC']).optional(), tareWeighingDevicePresent: z.boolean().optional(), presetTareDevicePresent: z.boolean().optional(),
     intervalType: z.enum(['single-interval', 'multi-interval']).optional(),
     multipleIndicatingDevices: z.boolean().optional(),
     loadReceptorType: z.enum(['normal platform', 'other / special configuration']).optional(),
@@ -62,6 +88,10 @@ const schema = z.object({
     powerSupplyType: z.enum(['AC mains', 'DC / battery', 'Other', 'Not specified']).optional(),
     mobileInstrument: z.boolean().optional(),
     portableRoadVehicleInstrument: z.boolean().optional(),
+    rollingLoad: z.boolean().optional(),
+    stableEquilibriumFunction: z.boolean().optional(), printingCapability: z.boolean().optional(), dataStorageCapability: z.boolean().optional(), zeroSettingCapability: z.boolean().optional(), tareCapability: z.boolean().optional(), differentiatedScaleDivisions: z.boolean().optional(),
+    hasLevelIndicator: z.boolean().optional(), hasAutomaticTiltSensor: z.boolean().optional(), manufacturerTiltLimit: z.number().finite().nonnegative().optional(), tiltConfiguration: z.boolean().optional(), mobileOutdoorUse: z.boolean().optional(),
+    powerSourceType: z.enum(['AC_MAINS', 'EXTERNAL_AC_DC', 'NON_RECHARGEABLE_BATTERY', 'ROAD_VEHICLE_BATTERY_12V', 'ROAD_VEHICLE_BATTERY_24V']).optional(), nominalVoltage: z.number().finite().positive().optional(), minimumOperatingVoltage: z.number().finite().positive().optional(), maximumVoltage: z.number().finite().positive().optional(), specifiedVoltageRange: z.object({ min: z.number().finite().positive().optional(), max: z.number().finite().positive().optional() }).optional(), threePhaseSupply: z.boolean().optional(), rechargeableBattery: z.boolean().optional(), rechargeableBatteryCanChargeDuringOperation: z.boolean().optional(), specifiedMinimumTemperature: z.number().finite().optional(), specifiedMaximumTemperature: z.number().finite().optional(), manufacturerReferenceTemperature: z.number().finite().optional(),
     printer: z.string().optional().default(''),
     interfaces: z.string().optional().default(''),
     additionalInformation: z.string().optional().default(''),
@@ -79,6 +109,8 @@ const schema = z.object({
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['n'], message: 'n must be greater than zero when provided.' });
     }
     if (instrument.max > 0 && instrument.e > 0 && !Number.isInteger(instrument.max / instrument.e)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['e'], message: 'Max divided by e must produce a whole number of verification intervals.' });
+    const scaleInterval = validateScaleIntervals(instrument);
+    if (!scaleInterval.valid) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['d'], message: scaleInterval.message });
   }),
   laboratory: z.object({
     name: z.string().optional().default(''), location: z.string().optional().default(''), testerName: z.string().optional().default(''),
@@ -206,14 +238,67 @@ r.patch('/:id/zero-checking/phases/:phaseCode', async (req: any, res, next) => {
     const finiteNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
     let observations: any; let calculations: any = undefined; let result: string = 'OBSERVED';
     if (phaseCode === 'A.4.2.1') {
-      const body = z.object({ startingZeroState: z.string().trim().min(1), appliedLoad: z.number().finite().min(0), zeroRestored: z.enum(['Yes', 'No']), observedPositiveRange: z.number().finite().min(0), observedNegativeRange: z.number().finite().min(0).optional(), notes: z.string().optional().default(''), unit: z.string().optional() }).parse(req.body);
+      const body = z.object({
+        startingZeroState: z.string().trim().min(1),
+        appliedLoad: z.number().finite().min(0).optional(),
+        zeroRestored: z.enum(['Yes', 'No']).optional(),
+        observedPositiveRange: z.number().finite().min(0).optional(),
+        observedNegativeRange: z.number().finite().min(0).optional(),
+        initialLoadApplied: z.number().finite().min(0).optional(),
+        maximumLoadRemovedWhileZeroRestored: z.number().finite().min(0).optional(),
+        nextRemovalFailedToRestoreZero: z.enum(['Yes', 'No']).optional(),
+        notes: z.string().optional().default(''), unit: z.string().optional(),
+      }).parse(req.body);
       if (!isMassUnit(body.unit || instrumentUnit)) return res.status(400).json({ message: 'Use a supported mass unit: mg, g, kg, or t.' });
-      observations = { ...body, unit, appliedLoad: convertMass(body.appliedLoad, unit, instrumentUnit), observedPositiveRange: convertMass(body.observedPositiveRange, unit, instrumentUnit), observedNegativeRange: body.observedNegativeRange === undefined ? undefined : convertMass(body.observedNegativeRange, unit, instrumentUnit), inputAppliedLoad: body.appliedLoad, inputObservedPositiveRange: body.observedPositiveRange, inputObservedNegativeRange: body.observedNegativeRange };
-      result = body.zeroRestored === 'No' ? 'FAIL' : 'OBSERVED';
+      if (test.instrumentSnapshot?.zeroSettingMethod === 'Automatic') {
+        if (body.initialLoadApplied === undefined || body.maximumLoadRemovedWhileZeroRestored === undefined || !body.nextRemovalFailedToRestoreZero) return res.status(400).json({ message: 'Record the initial load, maximum load removed while automatic zero was restored, and the next-removal observation.' });
+        const initialLoadApplied = convertMass(body.initialLoadApplied, unit, instrumentUnit);
+        const observedZeroSettingRange = convertMass(body.maximumLoadRemovedWhileZeroRestored, unit, instrumentUnit);
+        observations = { ...body, unit, initialLoadApplied, maximumLoadRemovedWhileZeroRestored: observedZeroSettingRange, observedZeroSettingRange, inputInitialLoadApplied: body.initialLoadApplied, inputMaximumLoadRemovedWhileZeroRestored: body.maximumLoadRemovedWhileZeroRestored };
+        result = 'OBSERVED';
+      } else {
+        if (body.appliedLoad === undefined || body.zeroRestored === undefined || body.observedPositiveRange === undefined) return res.status(400).json({ message: 'Record the applied load, zero-restoration observation, and positive zero-setting range.' });
+        observations = { ...body, unit, appliedLoad: convertMass(body.appliedLoad, unit, instrumentUnit), observedPositiveRange: convertMass(body.observedPositiveRange, unit, instrumentUnit), observedNegativeRange: body.observedNegativeRange === undefined ? undefined : convertMass(body.observedNegativeRange, unit, instrumentUnit), inputAppliedLoad: body.appliedLoad, inputObservedPositiveRange: body.observedPositiveRange, inputObservedNegativeRange: body.observedNegativeRange };
+        result = body.zeroRestored === 'No' ? 'FAIL' : 'OBSERVED';
+      }
     } else if (phaseCode === 'A.4.2.2') {
-      const body = z.object({ startingIndication: z.number().finite(), increment: z.number().finite().positive(), indicationChanges: z.string().trim().min(1), observedLowerRange: z.number().finite(), observedUpperRange: z.number().finite(), notes: z.string().optional().default(''), unit: z.string().optional() }).parse(req.body);
+      const body = z.object({
+        startingIndication: z.number().finite(),
+        indicationObservations: z.array(z.object({ sequence: z.number().int().positive(), value: z.number().finite(), unit: z.enum(['mg', 'g', 'kg', 't']), observedAt: z.string().datetime().optional() })).min(1),
+        observedLowerRange: z.number().finite(),
+        observedUpperRange: z.number().finite(),
+        notes: z.string().optional().default(''), unit: z.string().optional(),
+      }).parse(req.body);
       if (!isMassUnit(body.unit || instrumentUnit)) return res.status(400).json({ message: 'Use a supported mass unit: mg, g, kg, or t.' });
-      observations = { ...body, unit, startingIndication: convertMass(body.startingIndication, unit, instrumentUnit), increment: convertMass(body.increment, unit, instrumentUnit), observedLowerRange: convertMass(body.observedLowerRange, unit, instrumentUnit), observedUpperRange: convertMass(body.observedUpperRange, unit, instrumentUnit), inputStartingIndication: body.startingIndication, inputIncrement: body.increment, inputObservedLowerRange: body.observedLowerRange, inputObservedUpperRange: body.observedUpperRange };
+      const rawObservations = body.indicationObservations as ZeroIndicatorObservationInput[];
+      try { validateZeroIndicatorObservations(rawObservations); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid observed indication sequence.' }); }
+      const d = Number(test.instrumentSnapshot?.d);
+      if (!Number.isFinite(d) || d <= 0) return res.status(409).json({ message: 'Unable to derive the A.4.2.2 observation increment because instrument d is invalid.', code: 'CONFIGURATION_REQUIRED' });
+      const increment = deriveZeroIndicatorIncrement(d);
+      const lowerRange = convertMass(body.observedLowerRange, unit, instrumentUnit);
+      const upperRange = convertMass(body.observedUpperRange, unit, instrumentUnit);
+      try { validateSignedZeroRanges(lowerRange, upperRange); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Observed zero ranges must use signed values.' }); }
+      observations = {
+        unit: instrumentUnit,
+        inputUnit: unit,
+        startingIndication: convertMass(body.startingIndication, unit, instrumentUnit),
+        increment,
+        observedLowerRange: lowerRange,
+        observedUpperRange: upperRange,
+        inputStartingIndication: body.startingIndication,
+        indicationObservations: rawObservations.map(observation => ({
+          sequence: observation.sequence,
+          value: convertMass(observation.value, observation.unit, instrumentUnit),
+          unit: instrumentUnit,
+          inputValue: observation.value,
+          inputUnit: observation.unit,
+          observedAt: observation.observedAt ? new Date(observation.observedAt) : new Date(),
+          testerId: req.user._id,
+          testerNameSnapshot: userName(req.user),
+        })),
+        inputObservedLowerRange: body.observedLowerRange,
+        inputObservedUpperRange: body.observedUpperRange,
+      };
     } else {
       const snapshot: any = test.instrumentSnapshot || {}; const max = Number(snapshot.max); const e = Number(snapshot.e);
       const body = z.object({ zeroIndicationI0: z.number().finite(), deltaL0: z.number().finite().min(0), loadL: z.number().finite().min(0), indicationI: z.number().finite(), deltaL: z.number().finite().min(0), notes: z.string().optional().default(''), unit: z.string().optional() }).parse(req.body);
@@ -291,6 +376,948 @@ r.post('/:id/zero-setting-before-loading/complete', async (req: any, res, next) 
   } catch (e) { next(e); }
 });
 
+const publicTare = (test: any) => { const value: any = test.toObject ? test.toObject() : { ...test }; delete value._id; delete value.reportId; delete value.testerId; return value; };
+const tareState = async (report: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.6');
+  const zeroChecking: any = await ZeroCheckingTest.findOne({ reportId: report._id });
+  const fingerprint = sourceFingerprint(zeroChecking);
+  const test: any = await TareTest.findOne({ reportId: report._id });
+  const stale = !!test && test.status === 'COMPLETED' && !!fingerprint && test.sourceFingerprint !== fingerprint;
+  return { route, applicability, test, fingerprint, stale };
+};
+const tarePrerequisitesComplete = async (report: any, route: any) => {
+  const before = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.code !== 'A.4.6' && item.order < (route.tests.find((candidate: any) => candidate.code === 'A.4.6')?.order || 0));
+  const [zeroChecking, zeroSettingBeforeLoading, performance] = await Promise.all([ZeroCheckingTest.findOne({ reportId: report._id }), ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }), WeighingPerformanceTest.findOne({ reportId: report._id })]);
+  const zeroSetting: any = zeroSettingBeforeLoading;
+  return before.every((item: any) => item.code === 'A.4.2' ? zeroChecking?.status === 'COMPLETED' : item.code === 'A.4.3' ? zeroSetting?.status === 'COMPLETED' && !zeroSetting?.stale : item.code === 'A.4.4' ? performance?.status === 'COMPLETED' : false);
+};
+const tareEvent = (test: any, action: string, user: any, metadata: any = {}) => { test.events.push({ action, testerId: user._id, testerNameSnapshot: userName(user), timestamp: new Date(), metadata }); };
+const tareE0 = async (report: any) => {
+  const zero: any = await ZeroCheckingTest.findOne({ reportId: report._id }); const phase: any = zero?.phases?.find((item: any) => item.code === 'A.4.2.3');
+  if (!zero || zero.status !== 'COMPLETED' || phase?.status !== 'COMPLETED' || !phase.calculations || !finite(phase.calculations.calculatedE0)) throw Object.assign(new Error('Complete A.4.2.3 before recording tare observations.'), { status: 409 });
+  return { zero, phase, value: Number(phase.calculations.calculatedE0) };
+};
+const finishTarePhase = (test: any, phase: any) => { phase.status = 'COMPLETED'; phase.completedAt = new Date(); const next = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && item.status !== 'COMPLETED'); if (next) next.status = 'AVAILABLE'; const required = test.phases.filter((item: any) => item.applicability === 'APPLICABLE'); if (required.every((item: any) => item.status === 'COMPLETED')) { test.status = 'COMPLETED'; test.result = required.some((item: any) => item.result === 'FAIL' || item.observations?.some((observation: any) => observation.complianceResult === 'FAIL')) ? 'FAIL' : 'PASS'; test.completedAt = new Date(); } };
+
+r.get('/:id/tare', async (req: any, res, next) => { try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await tareState(report); const test = state.test ? publicTare(state.test) : null; if (test && state.stale) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; } res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, test }); } catch (e) { next(e); } });
+
+const tareConfigurationInput = z.object({
+  tareType: z.enum(['SUBTRACTIVE', 'ADDITIVE']),
+  maximumTareEffect: z.object({ value: z.number().finite().positive(), unit: z.enum(['mg', 'g', 'kg', 't']) }),
+  tareOperationMode: z.enum(['NON_AUTOMATIC', 'SEMI_AUTOMATIC', 'AUTOMATIC']),
+  tareWeighingDevicePresent: z.boolean(),
+  presetTareDevicePresent: z.boolean(),
+});
+
+r.patch('/:id/tare/configuration', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req);
+    if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const snapshot: any = report.instrument || {};
+    const profile = instrumentProfileFromRecord(snapshot as Record<string, unknown>);
+    if (profile.tareDevicePresent !== true) return res.status(409).json({ message: 'A.4.6 is not applicable because the instrument has no tare device.', code: 'NOT_APPLICABLE' });
+    const data = tareConfigurationInput.parse(req.body);
+    const existingTest: any = await TareTest.findOne({ reportId: report._id });
+    if (existingTest) {
+      existingTest.revisionHistory = [...(existingTest.revisionHistory || []), { changedAt: new Date(), reason: 'Tare configuration changed after execution began.', previousConfiguration: existingTest.tareConfigurationSnapshot }];
+      existingTest.status = 'REVALIDATION_REQUIRED';
+      existingTest.result = 'REVALIDATION_REQUIRED';
+      tareEvent(existingTest, 'TARE_CONFIGURATION_CHANGED_REVALIDATION_REQUIRED', req.user, { configuration: data });
+      await existingTest.save();
+    }
+    snapshot.tareDevicePresent = true;
+    snapshot.tareDevice = 'Yes';
+    snapshot.tareType = data.tareType;
+    snapshot.maximumTareEffect = data.maximumTareEffect;
+    snapshot.tareOperationMode = data.tareOperationMode;
+    snapshot.tareWeighingDevicePresent = data.tareWeighingDevicePresent;
+    snapshot.presetTareDevicePresent = data.presetTareDevicePresent;
+    report.markModified('instrument');
+    await report.save();
+    const route = generateApplicability(instrumentProfileFromRecord(snapshot as Record<string, unknown>));
+    const applicability: any = route.tests.find(test => test.code === 'A.4.6');
+    res.json({ report: report.toObject(), applicability, stale: Boolean(existingTest), test: existingTest ? publicTare(existingTest) : null });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/tare/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await tareState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.6 requires complete tare configuration.', code: 'CONFIGURATION_REQUIRED' });
+    if (!state.fingerprint) return res.status(409).json({ message: 'Complete A.4.2.3 before starting Tare.', code: 'DEPENDENCY_REQUIRED' });
+    if (!(await tarePrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Tare.', code: 'DEPENDENCY_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const instrument: any = report.instrument || {}; const config: any = instrument.maximumTareEffect; const instrumentUnit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+      const maxTare = convertMass(Number(config.value), config.unit, instrumentUnit); const requestedTare = req.body.representativeTare === undefined ? undefined : convertMass(Number(req.body.representativeTare), String(req.body.representativeTareUnit || instrumentUnit) as MassUnit, instrumentUnit);
+      const plan = generateTareLoadPlan(Number(instrument.min), Number(instrument.max), Number(instrument.e), String(instrument.accuracyClass), instrument.tareType, maxTare, requestedTare); if (!plan.supported) return res.status(409).json({ message: plan.reason, code: 'CONFIGURATION_REQUIRED' });
+      const phases = (state.applicability.phases || []).map((phase: any, index: number, all: any[]) => ({ ...phase, applicability: phase.status, status: phase.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : index === all.findIndex(item => item.status === 'APPLICABLE') ? 'AVAILABLE' : 'LOCKED', observations: [] }));
+      const tareConfig = { tareDevicePresent: instrument.tareDevicePresent, tareType: instrument.tareType, maximumTareEffect: { value: maxTare, unit: instrumentUnit }, tareOperationMode: instrument.tareOperationMode, tareWeighingDevicePresent: instrument.tareWeighingDevicePresent, presetTareDevicePresent: instrument.presetTareDevicePresent };
+      test = new TareTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: 'R76-A4.6-1.0', ruleSetId: 'oiml-r76-annex-a-v1', source: 'OIML R 76-1:2006 Annex A A.4.6', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', sourceFingerprint: state.fingerprint, instrumentSnapshot: { accuracyClass: instrument.accuracyClass, unit: instrumentUnit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d }, tareConfigurationSnapshot: tareConfig, loadPlan: plan.loads, phases, startedAt: new Date(), events: [] });
+      tareEvent(test, 'TARE_TEST_STARTED', req.user, { ruleSetId: 'R76-A4.6-1.0' }); await test.save();
+    }
+    report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.status(201).json({ report, applicability: state.applicability, test: publicTare(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/tare/phases/:phaseCode', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const phaseCode = String(req.params.phaseCode); if (!['A.4.6.1', 'A.4.6.2', 'A.4.6.3'].includes(phaseCode)) return res.status(400).json({ message: 'Unknown A.4.6 phase.' });
+    const test: any = await TareTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start the Tare test first.' }); const phase: any = test.phases.find((item: any) => item.code === phaseCode); if (!phase || phase.applicability !== 'APPLICABLE') return res.status(409).json({ message: phase?.reason || 'This A.4.6 phase is not applicable.', code: phase?.applicability || 'NOT_APPLICABLE' });
+    const firstPending = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && item.status !== 'COMPLETED'); const correctingCompletedPhase = phaseCode === 'A.4.6.2' && phase.status === 'COMPLETED'; if ((firstPending?.code !== phaseCode) && !correctingCompletedPhase) return res.status(409).json({ message: 'Complete the previous A.4.6 phase first.', code: 'DEPENDENCY_REQUIRED' });
+    if (phaseCode === 'A.4.6.2' && (phase.observations?.length || phase.calculations)) test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode, previousObservations: phase.observations, previousCalculations: phase.calculations, previousResult: phase.result, reason: 'A.4.6.2 tare-setting observation corrected.' }];
+    const snapshot: any = test.instrumentSnapshot || {}; const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const unit = String(req.body.unit || instrumentUnit); if (!isMassUnit(unit)) return res.status(400).json({ message: 'Use a supported mass unit: mg, g, kg, or t.' }); const source = await tareE0(report); if (test.sourceFingerprint && sourceFingerprint(source.zero) && test.sourceFingerprint !== sourceFingerprint(source.zero)) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), reason: 'The authoritative A.4.2.3 result was corrected.', previousSourceFingerprint: test.sourceFingerprint }]; await test.save(); return res.status(409).json({ message: 'A.4.2.3 changed. Revalidate the Tare test before continuing.', code: 'REVALIDATION_REQUIRED' }); } const e = Number(snapshot.e); const max = Number(snapshot.max);
+    if (phaseCode === 'A.4.6.1') {
+      if (req.body.observation) {
+        const body = z.object({ tareValue: z.number().finite().nonnegative(), grossLoad: z.number().finite().nonnegative(), indicationI: z.number().finite(), deltaL: z.number().finite().nonnegative(), direction: z.enum(['INCREASING', 'DECREASING']), notes: z.string().optional().default('') }).parse(req.body.observation);
+        const tareValue = convertMass(body.tareValue, unit, instrumentUnit); const grossLoad = convertMass(body.grossLoad, unit, instrumentUnit); const indicationI = convertMass(body.indicationI, unit, instrumentUnit); const deltaL = convertMass(body.deltaL, unit, instrumentUnit); if (grossLoad > max) return res.status(400).json({ message: 'Gross load must not exceed the verified instrument Max.' }); const netLoad = calculateNetLoad(grossLoad, tareValue); if (netLoad > max) return res.status(400).json({ message: 'Net load must not exceed the verified instrument Max.' }); const mpe = getMpe(snapshot.accuracyClass, netLoad, e, { min: Number(snapshot.min), max, unit: instrumentUnit, rangeType: 'single-range', loadType: 'NET' }); if (!mpe.supported) return res.status(400).json({ message: mpe.reason }); const calculation = calculateChangeoverError(netLoad, indicationI, deltaL, e, source.value); const complianceResult = evaluateCompliance(calculation.correctedErrorEc, mpe.mpeValue);
+        phase.observations.push({ sequence: phase.observations.length + 1, unit, inputTareValue: body.tareValue, inputGrossLoad: body.grossLoad, inputIndicationI: body.indicationI, inputDeltaL: body.deltaL, tareValue, grossLoad, netLoad, indicationI, deltaL, direction: body.direction, trueIndicationP: calculation.trueIndicationP, rawErrorE: calculation.rawErrorE, correctedErrorEc: calculation.correctedErrorEc, accuracyClass: mpe.accuracyClass, e: mpe.e, m: mpe.m, mpeMultiplier: mpe.mpeMultiplier, mpeValue: mpe.mpeValue, mpeUnit: mpe.mpeUnit, ruleSetId: mpe.ruleSetId, ruleReference: mpe.ruleReference, ruleVersion: mpe.ruleVersion, complianceResult, result: complianceResult, notes: body.notes, recordedAt: new Date() }); tareEvent(test, 'TARE_LOAD_OBSERVATION_RECORDED', req.user, { sequence: phase.observations.length });
+      }
+      if (req.body.complete === true) { if (phase.observations.length < 5) return res.status(400).json({ message: 'Record at least five actual tare load observations before completing A.4.6.1.' }); phase.result = phase.observations.some((item: any) => item.complianceResult === 'FAIL') ? 'FAIL' : 'PASS'; finishTarePhase(test, phase); }
+    } else if (phaseCode === 'A.4.6.2') {
+      const body = z.object({ loadL: z.number().finite().nonnegative(), indicationI: z.number().finite(), deltaL: z.number().finite().nonnegative(), notes: z.string().optional().default('') }).parse(req.body.observation || req.body); const loadL = convertMass(body.loadL, unit, instrumentUnit); const indicationI = convertMass(body.indicationI, unit, instrumentUnit); const deltaL = convertMass(body.deltaL, unit, instrumentUnit); if (loadL > max) return res.status(400).json({ message: 'Load must not exceed the verified instrument Max.' }); const calculation = calculateChangeoverError(loadL, indicationI, deltaL, e, source.value); const accuracy = tareSettingAccuracyResult(calculation.correctedErrorEc, e); phase.observations = [{ unit, inputLoadL: body.loadL, inputIndicationI: body.indicationI, inputDeltaL: body.deltaL, loadL, indicationI, deltaL, recordedAt: new Date() }]; phase.calculations = { ...calculation, calculatedE0: source.value, tareSettingError: accuracy.tareSettingError, accuracyLimit: accuracy.accuracyLimit, result: accuracy.result, sourcePhase: 'A.4.2.3' }; phase.result = accuracy.result; phase.notes = body.notes; if (req.body.complete !== false) finishTarePhase(test, phase); tareEvent(test, 'TARE_SETTING_ACCURACY_RECORDED', req.user, { result: accuracy.result });
+    } else return res.status(409).json({ message: 'The separate tare-weighing-device module is not available in this implementation.', code: 'PROCEDURE_MODULE_REQUIRED' });
+    await test.save(); if (test.status === 'COMPLETED') { report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); } res.json({ report, test: publicTare(test), phase });
+  } catch (e) { next(e); }
+});
+
+const publicEccentricity = (test: any) => {
+  const value: any = test.toObject ? test.toObject() : { ...test };
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const publicMultipleIndicating = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const multipleIndicatingState = async (report: any, user?: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.5');
+  const performance: any = await WeighingPerformanceTest.findOne({ reportId: report._id });
+  let test: any = await MultipleIndicatingDeviceTest.findOne({ reportId: report._id });
+  if (applicability?.status !== 'APPLICABLE') return { route, applicability, performance, test };
+  if (!performance || performance.status !== 'COMPLETED') return { route, applicability: { ...applicability, dependency: { code: 'A.4.4' } }, performance, test, waitingForSource: true };
+  const derived = deriveMultipleIndicatingComparisons(performance);
+  const fingerprint = multipleIndicatingSourceFingerprint(performance);
+  if (!test && user) {
+    test = new MultipleIndicatingDeviceTest({ reportId: report._id, testerId: user._id, testerNameSnapshot: userName(user), testerRole: user.role, testVersion: MULTIPLE_INDICATING_TEST_VERSION, engineVersion: route.engineVersion, ruleSetId: route.ruleSetId, source: MULTIPLE_INDICATING_SOURCE, sourceTestId: performance._id, sourceFingerprint: fingerprint, status: derived.result, result: derived.result, comparisons: derived.comparisons, events: [{ action: 'A4_5_DERIVED_FROM_A4_4', testerId: user._id, testerNameSnapshot: userName(user), timestamp: new Date(), metadata: { ruleReference: MULTIPLE_INDICATING_RULE_REFERENCE } }] });
+    if (derived.result === 'PASS' || derived.result === 'FAIL') test.completedAt = new Date();
+    await test.save();
+  } else if (test && test.sourceFingerprint !== fingerprint) {
+    test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), previousResult: test.result, previousFingerprint: test.sourceFingerprint, previousComparisons: test.comparisons, reason: 'The source A.4.4 observation set changed; A.4.5 was re-derived.' }];
+    test.sourceTestId = performance._id; test.sourceFingerprint = fingerprint; test.comparisons = derived.comparisons; test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.completedAt = undefined;
+    await test.save();
+  }
+  return { route, applicability, performance, test, waitingForSource: false, derived, fingerprint };
+};
+
+r.get('/:id/multiple-indicating-devices', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await multipleIndicatingState(report, req.user);
+    const sourceComplete = state.performance?.status === 'COMPLETED';
+    const status = state.applicability?.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : state.test?.status || (sourceComplete ? 'INCOMPLETE' : 'WAITING_FOR_SOURCE_TEST');
+    res.json({ report: report.toObject(), applicability: state.applicability, sourceComplete, sourceTest: state.performance ? { testId: String(state.performance._id), status: state.performance.status, observationCount: state.performance.loadPoints?.length || 0 } : null, status, test: publicMultipleIndicating(state.test) });
+  } catch (e) { next(e); }
+});
+
+const eccentricityState = async (report: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.7');
+  const test: any = await EccentricityTest.findOne({ reportId: report._id });
+  const fingerprint = eccentricityFingerprint(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const stale = !!test && test.status === 'COMPLETED' && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  return { route, applicability, test, fingerprint, stale };
+};
+
+const discriminationState = async (report: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.8');
+  const test: any = await DiscriminationTest.findOne({ reportId: report._id });
+  const snapshot = test?.instrumentSnapshot || report.instrument || {};
+  const fingerprint = discriminationFingerprint(snapshot);
+  const stale = !!test && test.status === 'COMPLETED' && !!test.sourceFingerprint && test.sourceFingerprint !== discriminationFingerprint(report.instrument || {});
+  return { route, applicability, test, fingerprint, stale };
+};
+
+const discriminationPrerequisitesComplete = async (report: any, route: any) => {
+  const target = route.tests.find((item: any) => item.code === 'A.4.8');
+  const prerequisiteTests = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.order < (target?.order || 0));
+  const [zeroChecking, zeroSettingBeforeLoading, performance, multipleIndicating, tare, eccentricity] = await Promise.all([
+    ZeroCheckingTest.findOne({ reportId: report._id }),
+    ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }),
+    WeighingPerformanceTest.findOne({ reportId: report._id }),
+    MultipleIndicatingDeviceTest.findOne({ reportId: report._id }),
+    TareTest.findOne({ reportId: report._id }),
+    EccentricityTest.findOne({ reportId: report._id }),
+  ]);
+  const completed: Record<string, boolean> = {
+    'A.4.2': zeroChecking?.status === 'COMPLETED',
+    'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED',
+    'A.4.4': performance?.status === 'COMPLETED',
+    'A.4.5': multipleIndicating?.status === 'PASS' || multipleIndicating?.status === 'FAIL',
+    'A.4.6': tare?.status === 'COMPLETED',
+    'A.4.7': eccentricity?.status === 'COMPLETED',
+  };
+  return prerequisiteTests.every((item: any) => completed[item.code] === true);
+};
+
+const eccentricityPrerequisitesComplete = async (report: any, route: any) => {
+  const prerequisiteTests = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.order < (route.tests.find((candidate: any) => candidate.code === 'A.4.7')?.order || 0));
+  const [zeroChecking, zeroSettingBeforeLoading, performance, tare] = await Promise.all([
+    ZeroCheckingTest.findOne({ reportId: report._id }),
+    ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }),
+    WeighingPerformanceTest.findOne({ reportId: report._id }),
+    TareTest.findOne({ reportId: report._id }),
+  ]);
+  const completed: Record<string, boolean> = {
+    'A.4.2': zeroChecking?.status === 'COMPLETED',
+    'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED',
+    'A.4.4': performance?.status === 'COMPLETED',
+    'A.4.6': tare?.status === 'COMPLETED',
+  };
+  return prerequisiteTests.every((item: any) => completed[item.code] === true);
+};
+
+const eccentricityEvent = (test: any, action: string, user: any, metadata: any = {}) => {
+  test.events.push({ action, testerId: user._id, testerNameSnapshot: userName(user), timestamp: new Date(), metadata });
+};
+
+r.get('/:id/eccentricity', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await eccentricityState(report);
+    const test = state.test ? publicEccentricity(state.test) : null;
+    if (test && state.stale) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; }
+    res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, test });
+  } catch (e) { next(e); }
+});
+
+const eccentricityStartInput = z.object({
+  zeroTrackingDisabled: z.literal(true),
+  testLoad: z.number().finite().nonnegative(),
+  testLoadUnit: z.enum(['mg', 'g', 'kg', 't']),
+});
+
+r.post('/:id/eccentricity/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await eccentricityState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.7 requires instrument configuration.', code: 'CONFIGURATION_REQUIRED' });
+    if (state.applicability.executionSupported !== true || state.applicability.method !== 'A.4.7.1') return res.status(409).json({ message: 'The applicable A.4.7 method is identified, but its execution module is not implemented for this configuration.', code: 'PROCEDURE_MODULE_REQUIRED' });
+    if (!(await eccentricityPrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Eccentricity.', code: 'DEPENDENCY_REQUIRED' });
+    if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Eccentricity test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const data = eccentricityStartInput.parse(req.body);
+      const instrument: any = report.instrument || {};
+      const instrumentUnit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+      const actualTestLoad = convertMass(data.testLoad, data.testLoadUnit, instrumentUnit);
+      const max = Number(instrument.max);
+      if (actualTestLoad > max) return res.status(400).json({ message: 'Test load must not exceed the verified instrument Max.' });
+      const positions = eccentricityPositions(state.applicability.method, Number(instrument.numberOfSupportPoints));
+      test = new EccentricityTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: ECCENTRICITY_TEST_VERSION, engineVersion: state.route.engineVersion, ruleSetId: state.route.ruleSetId, source: ECCENTRICITY_SOURCE, method: state.applicability.method, methodLabel: state.applicability.methodLabel, executionSupported: true, supportPointCount: instrument.numberOfSupportPoints, positionCount: positions.length, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: { accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, unit: instrumentUnit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, loadReceptorType: instrument.loadReceptorType, numberOfSupportPoints: instrument.numberOfSupportPoints, mobileInstrument: instrument.mobileInstrument, rollingLoad: instrument.rollingLoad }, sourceFingerprint: state.fingerprint, zeroConditionConfirmed: true, testLoad: { value: actualTestLoad, unit: instrumentUnit }, sketch: { type: 'four-quarter-normal-platform', positionIds: positions.map(position => position.positionId), source: 'OIML R 76-1:2006 Annex A A.4.7.1' }, positions: positions.map((position, index) => ({ ...position, status: index === 0 ? 'AVAILABLE' : 'LOCKED', result: 'NOT_DETERMINED', observations: [] })), startedAt: new Date(), events: [] });
+      eccentricityEvent(test, 'ECCENTRICITY_TEST_STARTED', req.user, { method: state.applicability.method, zeroTrackingDisabled: true, testLoad: { value: data.testLoad, unit: data.testLoadUnit } });
+      await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, test: publicEccentricity(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/eccentricity/positions/:positionId', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await eccentricityState(report); const test: any = state.test;
+    if (!test) return res.status(409).json({ message: 'Start the Eccentricity test first.' });
+    if (test.method !== 'A.4.7.1' || test.executionSupported !== true) return res.status(409).json({ message: 'This Eccentricity execution module is not available for the configured method.', code: 'PROCEDURE_MODULE_REQUIRED' });
+    if (state.stale || test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Eccentricity test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    if (!test.zeroConditionConfirmed) return res.status(409).json({ message: 'Confirm that automatic zero-setting / zero-tracking is disabled before recording positions.', code: 'ZERO_CONDITION_REQUIRED' });
+    const positionId = String(req.params.positionId); const position: any = test.positions.find((item: any) => item.positionId === positionId);
+    if (!position) return res.status(404).json({ message: 'Eccentricity position not found.' });
+    const current = test.positions.find((item: any) => item.status !== 'COMPLETED');
+    if (!current || current.positionId !== positionId) return res.status(409).json({ message: 'Complete the previous eccentricity position first.', code: 'DEPENDENCY_REQUIRED' });
+    const body = z.object({ loadL: z.number().finite().nonnegative(), indicationI: z.number().finite(), deltaL: z.number().finite().nonnegative(), e0: z.number().finite(), unit: z.enum(['mg', 'g', 'kg', 't']), notes: z.string().optional().default(''), complete: z.boolean().optional().default(true) }).parse(req.body);
+    const snapshot: any = test.instrumentSnapshot || {}; const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+    const loadL = convertMass(body.loadL, body.unit, instrumentUnit); const indicationI = convertMass(body.indicationI, body.unit, instrumentUnit); const deltaL = convertMass(body.deltaL, body.unit, instrumentUnit); const e0 = convertMass(body.e0, body.unit, instrumentUnit); const max = Number(snapshot.max);
+    if (loadL > max) return res.status(400).json({ message: 'Actual test load must not exceed the verified instrument Max.' });
+    const calculation = calculationForPosition({ loadL, indicationI, deltaL, e0, e: Number(snapshot.e), accuracyClass: String(snapshot.accuracyClass || '').replace(/^Class\s+/, ''), min: Number(snapshot.min), max, unit: instrumentUnit });
+    if (!calculation.supported) return res.status(400).json({ message: calculation.reason });
+    if (position.observations?.length) test.revisionHistory.push({ changedAt: new Date(), positionId, previousObservation: position.observations.at(-1), reason: 'Eccentricity position observation corrected.' });
+    position.observations = [{ unit: body.unit, inputLoadL: body.loadL, inputIndicationI: body.indicationI, inputDeltaL: body.deltaL, inputE0: body.e0, loadL, indicationI, deltaL, e0, trueIndicationP: calculation.trueIndicationP, rawErrorE: calculation.rawErrorE, correctedErrorEc: calculation.correctedErrorEc, accuracyClass: calculation.mpe.accuracyClass, e: calculation.mpe.e, m: calculation.mpe.m, mpeMultiplier: calculation.mpe.mpeMultiplier, mpeValue: calculation.mpe.mpeValue, mpeUnit: calculation.mpe.mpeUnit, ruleSetId: calculation.mpe.ruleSetId, ruleReference: calculation.mpe.ruleReference, ruleVersion: calculation.mpe.ruleVersion, complianceResult: calculation.complianceResult, notes: body.notes, recordedAt: new Date() }];
+    position.result = calculation.complianceResult; position.status = body.complete ? 'COMPLETED' : 'IN_PROGRESS'; if (body.complete) position.completedAt = new Date();
+    eccentricityEvent(test, body.complete ? 'ECCENTRICITY_POSITION_COMPLETED' : 'ECCENTRICITY_POSITION_OBSERVED', req.user, { positionId, result: calculation.complianceResult });
+    if (body.complete) {
+      const next = test.positions.find((item: any) => item.status !== 'COMPLETED'); if (next) next.status = 'AVAILABLE';
+      if (test.positions.every((item: any) => item.status === 'COMPLETED')) { test.status = 'COMPLETED'; test.result = test.positions.some((item: any) => item.result === 'FAIL') ? 'FAIL' : 'PASS'; test.completedAt = new Date(); eccentricityEvent(test, 'ECCENTRICITY_TEST_COMPLETED', req.user, { result: test.result }); }
+    } else test.status = 'IN_PROGRESS';
+    test.markModified('positions'); test.markModified('revisionHistory'); await test.save();
+    res.json({ report, test: publicEccentricity(test), position: position.toObject ? position.toObject() : position });
+  } catch (e) { next(e); }
+});
+
+const publicDiscrimination = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+r.get('/:id/discrimination', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await discriminationState(report);
+    const value: any = report.toObject(); delete value._id; delete value.submittedBy;
+    res.json({ report: value, applicability: state.applicability, stale: state.stale, test: publicDiscrimination(state.test) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/discrimination/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await discriminationState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.8 requires instrument configuration.', code: 'CONFIGURATION_REQUIRED' });
+    if (state.applicability.executionSupported !== true || state.applicability.method !== 'A.4.8.2') return res.status(409).json({ message: 'The applicable A.4.8 method is identified, but its execution module is not implemented for this configuration.', code: 'PROCEDURE_MODULE_REQUIRED' });
+    if (!(await discriminationPrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Discrimination.', code: 'DEPENDENCY_REQUIRED' });
+    if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Discrimination test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const instrument: any = report.instrument || {};
+      const unit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+      const stages = discriminationStages({ ...instrument, unit });
+      test = new DiscriminationTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: DISCRIMINATION_TEST_VERSION, engineVersion: state.route.engineVersion, ruleSetId: state.route.ruleSetId, source: DISCRIMINATION_SOURCE, method: state.applicability.method, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: { accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, digitalIndication: instrument.digitalIndication, unit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d }, sourceFingerprint: discriminationFingerprint(instrument), stages: stages.map(stage => ({ stageId: stage.stageId, label: stage.label, order: stage.order, targetLoad: { value: stage.targetLoad, unit }, oneTenthD: { value: stage.oneTenthD, unit }, onePointFourD: { value: stage.onePointFourD, unit }, recommendedIncrementCount: stage.recommendedIncrementCount, status: stage.order === 1 ? 'AVAILABLE' : 'LOCKED', result: 'NOT_DETERMINED' })), startedAt: new Date(), events: [{ action: 'DISCRIMINATION_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { method: state.applicability.method, ruleReference: DISCRIMINATION_RULE_REFERENCE } }] });
+      await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, test: publicDiscrimination(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/discrimination/stages/:stageId', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await discriminationState(report); const test: any = state.test;
+    if (!test) return res.status(409).json({ message: 'Start the Discrimination test first.' });
+    if (state.stale || test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Discrimination test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    const stage: any = test.stages.find((item: any) => item.stageId === String(req.params.stageId));
+    if (!stage) return res.status(404).json({ message: 'Discrimination stage not found.' });
+    const current = test.stages.find((item: any) => item.status !== 'COMPLETED');
+    const correcting = stage.status === 'COMPLETED';
+    if ((!current || current.stageId !== stage.stageId) && !correcting) return res.status(409).json({ message: 'Complete the previous discrimination stage first.', code: 'DEPENDENCY_REQUIRED' });
+    const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+    const body = z.object({ baseLoad: z.number().finite().nonnegative(), startingIndication: z.number().finite(), additionalIncrementCount: z.number().finite().int().positive(), removedAdditionalLoad: z.number().finite().nonnegative(), lowerIndication: z.number().finite(), restoredIncrement: z.number().finite().nonnegative(), appliedAdditionalLoad: z.number().finite().nonnegative(), upperIndication: z.number().finite(), unit: z.enum(['mg', 'g', 'kg', 't']), notes: z.string().optional().default(''), complete: z.boolean().optional().default(true) }).parse(req.body);
+    const normalize = (value: number) => convertMass(value, body.unit, unit);
+    const normalized = { baseLoad: normalize(body.baseLoad), startingIndication: normalize(body.startingIndication), additionalIncrementCount: body.additionalIncrementCount, removedAdditionalLoad: normalize(body.removedAdditionalLoad), lowerIndication: normalize(body.lowerIndication), restoredIncrement: normalize(body.restoredIncrement), appliedAdditionalLoad: normalize(body.appliedAdditionalLoad), upperIndication: normalize(body.upperIndication) };
+    if (Math.abs(normalized.baseLoad - Number(stage.targetLoad?.value)) > 1e-9) return res.status(400).json({ message: 'Base load must match the derived test target for this stage.' });
+    if (correcting) test.revisionHistory.push({ changedAt: new Date(), stageId: stage.stageId, previousObservation: stage.observation, previousResult: stage.result, reason: 'Discrimination stage observation corrected.' });
+    const calculation = evaluateDiscriminationObservation(normalized, { ...snapshot, unit });
+    stage.observation = { unit: body.unit, inputBaseLoad: body.baseLoad, inputStartingIndication: body.startingIndication, inputRemovedAdditionalLoad: body.removedAdditionalLoad, inputLowerIndication: body.lowerIndication, inputRestoredIncrement: body.restoredIncrement, inputAppliedAdditionalLoad: body.appliedAdditionalLoad, inputUpperIndication: body.upperIndication, ...calculation, notes: body.notes, recordedAt: new Date() };
+    stage.result = calculation.result; stage.status = body.complete ? 'COMPLETED' : 'IN_PROGRESS'; if (body.complete) stage.completedAt = new Date();
+    if (correcting) {
+      for (const later of test.stages.filter((item: any) => item.order > stage.order)) { later.status = 'LOCKED'; later.result = 'NOT_DETERMINED'; later.observation = undefined; later.completedAt = undefined; }
+      test.status = 'IN_PROGRESS'; test.result = 'NOT_DETERMINED'; test.completedAt = undefined;
+    }
+    if (body.complete) {
+      const next = test.stages.find((item: any) => item.status !== 'COMPLETED'); if (next) next.status = 'AVAILABLE';
+      if (test.stages.every((item: any) => item.status === 'COMPLETED')) { test.status = 'COMPLETED'; test.result = test.stages.some((item: any) => item.result === 'FAIL') ? 'FAIL' : 'PASS'; test.completedAt = new Date(); }
+    } else test.status = 'IN_PROGRESS';
+    test.events.push({ action: body.complete ? 'DISCRIMINATION_STAGE_COMPLETED' : 'DISCRIMINATION_STAGE_OBSERVED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { stageId: stage.stageId, result: calculation.result } });
+    test.markModified('stages'); test.markModified('revisionHistory'); await test.save(); res.json({ report, test: publicDiscrimination(test), stage: stage.toObject ? stage.toObject() : stage });
+  } catch (e) { next(e); }
+});
+
+const publicSensitivity = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const sensitivityState = async (report: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.9');
+  const test: any = await SensitivityTest.findOne({ reportId: report._id });
+  const fingerprint = sensitivityFingerprint(report.instrument || {});
+  const stale = !!test && test.status === 'COMPLETED' && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  return { route, applicability, test, fingerprint, stale };
+};
+
+const sensitivityPrerequisitesComplete = async (report: any, route: any) => {
+  const target = route.tests.find((item: any) => item.code === 'A.4.9');
+  const prerequisites = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.order < (target?.order || 0));
+  const [zeroChecking, zeroSettingBeforeLoading, performance, multipleIndicating, tare, eccentricity, discrimination] = await Promise.all([
+    ZeroCheckingTest.findOne({ reportId: report._id }), ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }), WeighingPerformanceTest.findOne({ reportId: report._id }), MultipleIndicatingDeviceTest.findOne({ reportId: report._id }), TareTest.findOne({ reportId: report._id }), EccentricityTest.findOne({ reportId: report._id }), DiscriminationTest.findOne({ reportId: report._id }),
+  ]);
+  const completed: Record<string, boolean> = { 'A.4.2': zeroChecking?.status === 'COMPLETED', 'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED', 'A.4.4': performance?.status === 'COMPLETED', 'A.4.5': multipleIndicating?.status === 'PASS' || multipleIndicating?.status === 'FAIL', 'A.4.6': tare?.status === 'COMPLETED', 'A.4.7': eccentricity?.status === 'COMPLETED', 'A.4.8': discrimination?.status === 'COMPLETED' };
+  return prerequisites.every((item: any) => completed[item.code] === true);
+};
+
+r.get('/:id/sensitivity', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await sensitivityState(report);
+    res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, test: publicSensitivity(state.test) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/sensitivity/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await sensitivityState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.9 is not applicable for this instrument.', code: 'NOT_APPLICABLE' });
+    if (state.applicability.executionSupported !== true) return res.status(409).json({ message: 'The applicable A.4.9 method is not implemented for this configuration.', code: 'PROCEDURE_MODULE_REQUIRED' });
+    if (!(await sensitivityPrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Sensitivity.', code: 'DEPENDENCY_REQUIRED' });
+    if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Sensitivity test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const instrument: any = report.instrument || {}; const unit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+      const snapshot = { accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, unit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, indicationDamping: instrument.indicationDamping || 'NOT_SPECIFIED' };
+      const stages = sensitivityStages(snapshot).map(stage => {
+        const mpe = getMpe(instrument.accuracyClass, stage.appliedTestLoad, instrument.e, { min: instrument.min, max: instrument.max, unit, rangeType: instrument.rangeType, loadType: 'GROSS' });
+        if (!mpe.supported) throw new Error(mpe.reason);
+        const extra = requiredExtraLoad({ mpeValue: mpe.mpeValue, mpeUnit: isMassUnit(mpe.mpeUnit) ? mpe.mpeUnit : unit }, unit); const displacement = requiredPermanentDisplacement(instrument.accuracyClass, instrument.max, unit);
+        return { stageId: stage.stageId, label: stage.label, order: stage.order, appliedTestLoad: { value: stage.appliedTestLoad, unit }, applicableMpe: { value: mpe.mpeValue, unit: mpe.mpeUnit }, absoluteMpe: extra.absoluteMpe, minimumExtraLoad: extra.minimumFloor, requiredExtraLoad: { value: extra.value, unit }, minimumPermanentDisplacement: displacement, status: stage.order === 1 ? 'AVAILABLE' : 'LOCKED', result: 'NOT_DETERMINED', mpeProvenance: { ruleReference: mpe.ruleReference, ruleSetId: mpe.ruleSetId, ruleVersion: mpe.ruleVersion } };
+      });
+      test = new SensitivityTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: SENSITIVITY_TEST_VERSION, engineVersion: state.route.engineVersion, ruleSetId: state.route.ruleSetId, source: SENSITIVITY_SOURCE, method: state.applicability.method, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, stages, procedureConfirmation: { normalOscillationConfirmed: false }, startedAt: new Date(), events: [{ action: 'SENSITIVITY_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { displacementRule: SENSITIVITY_DISPLACEMENT_RULE, mpeRule: SENSITIVITY_MPE_RULE } }] });
+      await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, test: publicSensitivity(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/sensitivity/procedure', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await SensitivityTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start the Sensitivity test first.' });
+    const body = z.object({ normalOscillationConfirmed: z.literal(true), dampedProcedureConfirmed: z.boolean().optional(), indicationDamping: z.enum(['NOT_SPECIFIED', 'DAMPED', 'NON_DAMPED']).optional() }).parse(req.body);
+    if (test.instrumentSnapshot?.indicationDamping === 'DAMPED' && body.dampedProcedureConfirmed !== true) return res.status(400).json({ message: 'Confirm that the extra load was applied with a slight impact for this damped instrument.', code: 'DAMPED_PROCEDURE_CONFIRMATION_REQUIRED' });
+    test.procedureConfirmation = { ...((test.procedureConfirmation as any)?.toObject?.() || test.procedureConfirmation || {}), ...body, confirmedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    test.events.push({ action: 'SENSITIVITY_PROCEDURE_CONFIRMED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { indicationDamping: body.indicationDamping || 'NOT_SPECIFIED' } });
+    test.markModified('procedureConfirmation'); await test.save(); res.json({ test: publicSensitivity(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/sensitivity/stages/:stageId', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await sensitivityState(report); const test: any = state.test;
+    if (!test) return res.status(409).json({ message: 'Start the Sensitivity test first.' });
+    if (state.stale || test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Sensitivity test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    if (!test.procedureConfirmation?.normalOscillationConfirmed) return res.status(409).json({ message: 'Confirm that the instrument was oscillating normally and the procedure was followed before recording observations.', code: 'PROCEDURE_CONFIRMATION_REQUIRED' });
+    const stage: any = test.stages.find((item: any) => item.stageId === String(req.params.stageId)); if (!stage) return res.status(404).json({ message: 'Sensitivity stage not found.' });
+    const current = test.stages.find((item: any) => item.status !== 'COMPLETED'); const correcting = stage.status === 'COMPLETED';
+    if ((!current || current.stageId !== stage.stageId) && !correcting) return res.status(409).json({ message: 'Complete the previous sensitivity stage first.', code: 'DEPENDENCY_REQUIRED' });
+    const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+    const body = z.object({ actualExtraLoad: z.number().finite().nonnegative(), actualExtraLoadUnit: z.enum(['mg', 'g', 'kg', 't']), middlePointBefore: z.number().finite(), middlePointAfter: z.number().finite(), notes: z.string().optional().default(''), complete: z.boolean().optional().default(true) }).parse(req.body);
+    const actualExtraLoad = convertMass(body.actualExtraLoad, body.actualExtraLoadUnit, unit);
+    if (correcting) test.revisionHistory.push({ changedAt: new Date(), stageId: stage.stageId, previousObservation: stage.observation, previousResult: stage.result, reason: 'Sensitivity stage observation corrected.' });
+    const calculation = evaluateSensitivityObservation({ actualExtraLoad, middlePointBefore: body.middlePointBefore, middlePointAfter: body.middlePointAfter }, stage.minimumPermanentDisplacement);
+    const { actualExtraLoad: _calculatedExtraLoad, ...derivedCalculation } = calculation;
+    stage.observation = { raw: { actualExtraLoad: body.actualExtraLoad, actualExtraLoadUnit: body.actualExtraLoadUnit, middlePointBefore: body.middlePointBefore, middlePointAfter: body.middlePointAfter }, actualExtraLoad: { value: actualExtraLoad, unit }, middlePointUnit: 'mm', ...derivedCalculation, notes: body.notes, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    stage.result = calculation.result; stage.status = body.complete ? 'COMPLETED' : 'IN_PROGRESS'; if (body.complete) stage.completedAt = new Date();
+    if (correcting) { for (const later of test.stages.filter((item: any) => item.order > stage.order)) { later.status = 'LOCKED'; later.result = 'NOT_DETERMINED'; later.observation = undefined; later.completedAt = undefined; } test.status = 'IN_PROGRESS'; test.result = 'NOT_DETERMINED'; test.completedAt = undefined; }
+    if (body.complete) { const next = test.stages.find((item: any) => item.status !== 'COMPLETED'); if (next) next.status = 'AVAILABLE'; if (test.stages.every((item: any) => item.status === 'COMPLETED')) { test.status = 'COMPLETED'; test.result = test.stages.some((item: any) => item.result === 'FAIL') ? 'FAIL' : 'PASS'; test.completedAt = new Date(); } } else test.status = 'IN_PROGRESS';
+    test.events.push({ action: body.complete ? 'SENSITIVITY_STAGE_COMPLETED' : 'SENSITIVITY_STAGE_OBSERVED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { stageId: stage.stageId, result: calculation.result } });
+    test.markModified('stages'); test.markModified('revisionHistory'); await test.save(); res.json({ report, test: publicSensitivity(test), stage: stage.toObject ? stage.toObject() : stage });
+  } catch (e) { next(e); }
+});
+
+const publicRepeatability = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const repeatabilityState = async (report: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.10');
+  const test: any = await RepeatabilityTest.findOne({ reportId: report._id });
+  const fingerprint = repeatabilityFingerprint({ ...(report.instrument || {}), controlStage: report.controlStage || 'VERIFICATION' });
+  const stale = !!test && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  if (stale && test.status !== 'REVALIDATION_REQUIRED' && report.status !== 'COMPLETED') {
+    test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.completedAt = undefined;
+    test.events.push({ action: 'REPEATABILITY_REVALIDATION_REQUIRED', testerId: test.testerId, testerNameSnapshot: test.testerNameSnapshot, timestamp: new Date(), metadata: { previousFingerprint: test.sourceFingerprint, currentFingerprint: fingerprint } });
+    test.markModified('events'); await test.save();
+  }
+  return { route, applicability, test, fingerprint, stale };
+};
+
+const repeatabilityPrerequisitesComplete = async (report: any, route: any) => {
+  const target = route.tests.find((item: any) => item.code === 'A.4.10');
+  // Route 2 is gated by the complete A.4 route, including any applicable
+  // procedure whose execution module is still unavailable. This keeps the
+  // backend boundary aligned with the tester-facing route rather than
+  // allowing a direct A.5 URL to bypass an A.4 prerequisite.
+  const prerequisites = route.tests.filter((item: any) => (item.route === 'A.4' || (!item.route && item.code.startsWith('A.4.'))) && item.status === 'APPLICABLE' && item.order < (target?.order || 0));
+  const [zeroChecking, zeroSettingBeforeLoading, performance, multipleIndicating, tare, eccentricity, discrimination, sensitivity] = await Promise.all([
+    ZeroCheckingTest.findOne({ reportId: report._id }), ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }), WeighingPerformanceTest.findOne({ reportId: report._id }), MultipleIndicatingDeviceTest.findOne({ reportId: report._id }), TareTest.findOne({ reportId: report._id }), EccentricityTest.findOne({ reportId: report._id }), DiscriminationTest.findOne({ reportId: report._id }), SensitivityTest.findOne({ reportId: report._id }),
+  ]);
+  const completed: Record<string, boolean> = { 'A.4.2': zeroChecking?.status === 'COMPLETED', 'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED', 'A.4.4': performance?.status === 'COMPLETED', 'A.4.5': multipleIndicating?.status === 'PASS' || multipleIndicating?.status === 'FAIL', 'A.4.6': tare?.status === 'COMPLETED', 'A.4.7': eccentricity?.status === 'COMPLETED', 'A.4.8': discrimination?.status === 'COMPLETED', 'A.4.9': sensitivity?.status === 'COMPLETED' };
+  return prerequisites.every((item: any) => completed[item.code] === true);
+};
+
+r.get('/:id/repeatability', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await repeatabilityState(report);
+    res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, controlStage: report.controlStage || 'VERIFICATION', test: publicRepeatability(state.test) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/repeatability/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await repeatabilityState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.10 requires a valid instrument configuration.', code: 'CONFIGURATION_REQUIRED' });
+    if (!(await repeatabilityPrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Repeatability.', code: 'DEPENDENCY_REQUIRED' });
+    if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Repeatability test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const instrument: any = report.instrument || {};
+      const unit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+      const controlStage: RepeatabilityControlStage = report.controlStage === 'TYPE_APPROVAL' ? 'TYPE_APPROVAL' : 'VERIFICATION';
+      const snapshot = { controlStage, accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, unit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, zeroSettingMethod: instrument.zeroSettingMethod, zeroTracking: instrument.zeroTracking };
+      const plan = getRepeatabilityPlan({ ...snapshot, massUnit: unit, verificationMode: controlStage, instrumentConfiguration: instrument });
+      const performance: any = await WeighingPerformanceTest.findOne({ reportId: report._id });
+      const e0 = Number(performance?.zeroReference?.calculatedE0);
+      if (!Number.isFinite(e0)) return res.status(409).json({ message: 'Complete the A.4.4 zero reference before starting Repeatability.', code: 'ZERO_REFERENCE_REQUIRED' });
+      const series = plan.series.map(item => {
+        const mpe = getMpe(instrument.accuracyClass, item.targetLoad, instrument.e, { min: instrument.min, max: instrument.max, unit, rangeType: instrument.rangeType, loadType: 'GROSS' });
+        if (!mpe.supported) throw Object.assign(new Error(mpe.reason), { status: 409 });
+        return { ...item, targetLoad: { value: item.targetLoad, unit }, status: item.seriesId === 'SERIES_1' ? 'AVAILABLE' : 'LOCKED', result: 'NOT_DETERMINED', observations: [], summary: { targetMpe: { value: mpe.mpeValue, unit }, targetMpeRule: mpe.ruleReference } };
+      });
+      test = new RepeatabilityTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: REPEATABILITY_TEST_VERSION, engineVersion: plan.engineVersion, ruleSetId: state.route.ruleSetId, source: REPEATABILITY_SOURCE, controlStage, method: 'SAME_LOAD_REPEAT_WEIGHINGS', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, zeroReferenceE0: e0, procedureConfirmation: { automaticZeroOnConfirmed: false, unloadedInstrumentRestConfirmed: false }, series, startedAt: new Date(), events: [{ action: 'REPEATABILITY_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { controlStage, applicableRule: REPEATABILITY_RULE_REFERENCE } }] });
+      await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, controlStage: test.controlStage, test: publicRepeatability(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/repeatability/procedure', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await RepeatabilityTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start the Repeatability test first.' });
+    const body = z.object({ automaticZeroOnConfirmed: z.boolean(), unloadedInstrumentRestConfirmed: z.literal(true) }).parse(req.body);
+    const snapshot: any = test.instrumentSnapshot || {};
+    if ((snapshot.zeroSettingMethod === 'Automatic' || snapshot.zeroTracking === true) && body.automaticZeroOnConfirmed !== true) return res.status(400).json({ message: 'Confirm that automatic zero-setting / zero-tracking remained in operation during this test.' });
+    test.procedureConfirmation = { ...((test.procedureConfirmation as any)?.toObject?.() || test.procedureConfirmation || {}), ...body, confirmedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    test.events.push({ action: 'REPEATABILITY_PROCEDURE_CONFIRMED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { automaticZeroRequired: snapshot.zeroSettingMethod === 'Automatic' || snapshot.zeroTracking === true } });
+    test.markModified('procedureConfirmation'); await test.save(); res.json({ test: publicRepeatability(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/repeatability/series/:seriesId/observations/:repetition', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await repeatabilityState(report); const test: any = state.test;
+    if (!test) return res.status(409).json({ message: 'Start the Repeatability test first.' });
+    if (state.stale || test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Repeatability test before continuing.', code: 'REVALIDATION_REQUIRED' });
+    if (!test.procedureConfirmation?.unloadedInstrumentRestConfirmed) return res.status(409).json({ message: 'Confirm the repeat-weighing procedure before recording observations.', code: 'PROCEDURE_CONFIRMATION_REQUIRED' });
+    const series: any = test.series.find((item: any) => item.seriesId === String(req.params.seriesId)); if (!series) return res.status(404).json({ message: 'Repeatability series not found.' });
+    const repetition = Number(req.params.repetition); if (!Number.isInteger(repetition) || repetition < 1 || repetition > Number(series.requiredRepetitions)) return res.status(400).json({ message: 'Invalid repetition number.' });
+    const current = test.series.find((item: any) => item.status !== 'COMPLETED'); const existing = series.observations?.find((item: any) => item.repetition === repetition); const correcting = Boolean(existing);
+    if ((!current || current.seriesId !== series.seriesId) && !correcting) return res.status(409).json({ message: 'Complete the current repeatability series first.', code: 'DEPENDENCY_REQUIRED' });
+    const body = z.object({ actualLoad: z.number().finite().nonnegative(), loadUnit: z.enum(['mg', 'g', 'kg', 't']), indication: z.number().finite(), indicationUnit: z.enum(['mg', 'g', 'kg', 't']), deltaL: z.number().finite().nonnegative(), deltaLUnit: z.enum(['mg', 'g', 'kg', 't']), unloadedInstrumentAtRest: z.literal(true), zeroResetPerformed: z.boolean().optional().default(false), notes: z.string().optional().default(''), complete: z.boolean().optional().default(true) }).parse(req.body);
+    const instrument: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+    const actualLoad = convertMass(body.actualLoad, body.loadUnit, unit); const max = Number(instrument.max); if (actualLoad > max) return res.status(400).json({ message: 'Actual load must not exceed the verified instrument Max.' });
+    const prior = (series.observations || []).filter((item: any) => item.repetition !== repetition && finite(item.actualLoad)); if (prior.length && Math.abs(Number(prior[0].actualLoad) - actualLoad) > 1e-9) return res.status(400).json({ message: 'Repeatability observations in one series must use the same actual load.' });
+    const calculation = calculateRepeatabilityObservation({ actualLoad: body.actualLoad, actualLoadUnit: body.loadUnit, indication: body.indication, indicationUnit: body.indicationUnit, deltaL: body.deltaL, deltaLUnit: body.deltaLUnit, e0: Number(test.zeroReferenceE0 || 0), snapshot: { accuracyClass: instrument.accuracyClass, min: Number(instrument.min), max, e: Number(instrument.e), unit } });
+    if (!calculation.supported) return res.status(400).json({ message: calculation.reason });
+    if (correcting) test.revisionHistory.push({ changedAt: new Date(), seriesId: series.seriesId, repetition, previousObservation: existing, reason: 'Repeatability observation corrected.' });
+    const observation = { repetition, unit: body.loadUnit, inputActualLoad: body.actualLoad, actualLoad: calculation.loadL, inputIndication: body.indication, indication: calculation.indicationI, inputDeltaL: body.deltaL, deltaL: calculation.deltaL, e0: calculation.e0, trueIndicationP: calculation.trueIndicationP, rawErrorE: calculation.rawErrorE, correctedErrorEc: calculation.correctedErrorEc, individualResult: calculation.individualResult, individualResultError: calculation.individualResultError, individualResultStatus: calculation.individualResultStatus, mpeValue: calculation.mpeValue, mpeUnit: calculation.mpeUnit, m: calculation.m, mpeMultiplier: calculation.mpeMultiplier, ruleSetId: calculation.ruleSetId, ruleReference: calculation.ruleReference, ruleVersion: calculation.ruleVersion, unloadedInstrumentAtRest: body.unloadedInstrumentAtRest, zeroResetPerformed: body.zeroResetPerformed, notes: body.notes, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    series.observations = [...(series.observations || []).filter((item: any) => item.repetition !== repetition), observation].sort((a: any, b: any) => a.repetition - b.repetition);
+    series.status = body.complete ? 'IN_PROGRESS' : 'IN_PROGRESS'; series.result = 'INCOMPLETE';
+    if (body.complete && series.observations.filter((item: any) => finite(item.individualResult)).length >= Number(series.requiredRepetitions)) {
+      const summary = evaluateRepeatabilityResults(series.observations.map((item: any) => Number(item.individualResult)), Number(series.observations[0].mpeValue));
+      series.summary = { ...series.summary, ...summary, mpe: { value: Number(series.observations[0].mpeValue), unit: series.observations[0].mpeUnit }, result: summary.result };
+      series.result = summary.result; series.status = 'COMPLETED'; series.completedAt = new Date();
+      const next = test.series.find((item: any) => item.status !== 'COMPLETED'); if (next) next.status = 'AVAILABLE';
+      if (test.series.every((item: any) => item.status === 'COMPLETED')) { test.status = 'COMPLETED'; test.result = test.series.some((item: any) => item.result === 'FAIL') ? 'FAIL' : 'PASS'; test.completedAt = new Date(); }
+    } else test.status = 'IN_PROGRESS';
+    if (correcting) { for (const later of test.series.filter((item: any) => item.order > series.order)) { later.status = 'LOCKED'; later.result = 'NOT_DETERMINED'; later.observations = []; later.summary = undefined; later.completedAt = undefined; } test.status = 'IN_PROGRESS'; test.result = 'NOT_DETERMINED'; test.completedAt = undefined; }
+    test.events.push({ action: body.complete ? 'REPEATABILITY_OBSERVATION_COMPLETED' : 'REPEATABILITY_OBSERVATION_SAVED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), seriesId: series.seriesId, repetition, metadata: { result: calculation.individualResultStatus } });
+    test.markModified('series'); test.markModified('revisionHistory'); await test.save(); res.json({ report, test: publicRepeatability(test), series: series.toObject ? series.toObject() : series });
+  } catch (e) { next(e); }
+});
+
+const publicVariationWithTime = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const variationWithTimeState = async (report: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.11');
+  const test: any = await VariationWithTimeTest.findOne({ reportId: report._id });
+  const fingerprint = variationWithTimeFingerprint(report.instrument || {});
+  const stale = !!test && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  if (stale && test.status !== 'REVALIDATION_REQUIRED' && report.status !== 'COMPLETED') {
+    test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED';
+    test.events.push({ action: 'VARIATION_WITH_TIME_REVALIDATION_REQUIRED', testerId: test.testerId, testerNameSnapshot: test.testerNameSnapshot, timestamp: new Date(), metadata: { previousFingerprint: test.sourceFingerprint, currentFingerprint: fingerprint } });
+    test.markModified('events'); await test.save();
+  }
+  return { route, applicability, test, fingerprint, stale };
+};
+
+const variationWithTimePrerequisitesComplete = async (report: any, route: any) => {
+  const target = route.tests.find((item: any) => item.code === 'A.4.11');
+  const prerequisites = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.executionSupported !== false && item.order < (target?.order || 0));
+  const [zeroChecking, zeroSettingBeforeLoading, performance, multipleIndicating, tare, eccentricity, discrimination, sensitivity, repeatability] = await Promise.all([
+    ZeroCheckingTest.findOne({ reportId: report._id }), ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }), WeighingPerformanceTest.findOne({ reportId: report._id }), MultipleIndicatingDeviceTest.findOne({ reportId: report._id }), TareTest.findOne({ reportId: report._id }), EccentricityTest.findOne({ reportId: report._id }), DiscriminationTest.findOne({ reportId: report._id }), SensitivityTest.findOne({ reportId: report._id }), RepeatabilityTest.findOne({ reportId: report._id }),
+  ]);
+  const completed: Record<string, boolean> = { 'A.4.2': zeroChecking?.status === 'COMPLETED', 'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED', 'A.4.4': performance?.status === 'COMPLETED', 'A.4.5': multipleIndicating?.status === 'PASS' || multipleIndicating?.status === 'FAIL', 'A.4.6': tare?.status === 'COMPLETED', 'A.4.7': eccentricity?.status === 'COMPLETED', 'A.4.8': discrimination?.status === 'COMPLETED', 'A.4.9': sensitivity?.status === 'COMPLETED', 'A.4.10': repeatability?.status === 'COMPLETED' };
+  return prerequisites.every((item: any) => completed[item.code] === true);
+};
+
+const environmentalTemperatures = (report: any, test: any) => {
+  const environment: any = report.environment || {};
+  return [environment.temperatureStart, ...(test.environmentalReadings || [])].filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value));
+};
+
+r.get('/:id/variation-with-time', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await variationWithTimeState(report);
+    res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, test: publicVariationWithTime(state.test) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/variation-with-time/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await variationWithTimeState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.11 is not applicable for this instrument.', code: 'NOT_APPLICABLE' });
+    if (state.applicability.executionSupported !== true) return res.status(409).json({ message: state.applicability.reason || 'The configured A.4.11 method is not available in this execution module.', code: 'PROCEDURE_MODULE_REQUIRED' });
+    if (!(await variationWithTimePrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Variation of indication with time.', code: 'DEPENDENCY_REQUIRED' });
+    if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate Variation of indication with time before continuing.', code: 'REVALIDATION_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const instrument: any = report.instrument || {}; const unit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+      const snapshot = { accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, unit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, rangeType: instrument.rangeType, intervalType: instrument.intervalType, zeroSettingMethod: instrument.zeroSettingMethod, zeroTracking: instrument.zeroTracking, indicationDamping: instrument.indicationDamping || 'NOT_SPECIFIED' };
+      const plan = variationWithTimePlan(snapshot);
+      test = new VariationWithTimeTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: VARIATION_WITH_TIME_TEST_VERSION, engineVersion: VARIATION_WITH_TIME_ENGINE_VERSION, ruleSetId: state.route.ruleSetId, source: VARIATION_WITH_TIME_SOURCE, method: state.applicability.method, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, plan, procedureConfirmation: { normalOscillationConfirmed: false }, environmentalReadings: [], creep: { status: 'AVAILABLE', result: 'NOT_DETERMINED', checkpoints: [] }, zeroReturn: { status: 'LOCKED', result: 'NOT_DETERMINED', checkpoints: [] }, startedAt: new Date(), events: [{ action: 'VARIATION_WITH_TIME_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { source: VARIATION_WITH_TIME_SOURCE } }] });
+      await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, test: publicVariationWithTime(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/variation-with-time/procedure', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Variation of indication with time first.' });
+    const body = z.object({ normalOscillationConfirmed: z.literal(true), dampedProcedureConfirmed: z.boolean().optional() }).parse(req.body);
+    if (test.instrumentSnapshot?.indicationDamping === 'DAMPED' && body.dampedProcedureConfirmed !== true) return res.status(400).json({ message: 'Confirm that the extra load procedure for the damped instrument was followed.', code: 'DAMPED_PROCEDURE_CONFIRMATION_REQUIRED' });
+    test.procedureConfirmation = { ...((test.procedureConfirmation as any)?.toObject?.() || test.procedureConfirmation || {}), ...body, confirmedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    test.events.push({ action: 'VARIATION_WITH_TIME_PROCEDURE_CONFIRMED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { indicationDamping: test.instrumentSnapshot?.indicationDamping || 'NOT_SPECIFIED' } });
+    test.markModified('procedureConfirmation'); await test.save(); res.json({ test: publicVariationWithTime(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/variation-with-time/creep/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await variationWithTimeState(report); const test: any = state.test; if (!test) return res.status(409).json({ message: 'Start Variation of indication with time first.' });
+    if (state.stale || test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'The instrument configuration changed. Revalidate Variation of indication with time before continuing.', code: 'REVALIDATION_REQUIRED' });
+    if (!test.procedureConfirmation?.normalOscillationConfirmed) return res.status(409).json({ message: 'Confirm the creep procedure before starting the timer.', code: 'PROCEDURE_CONFIRMATION_REQUIRED' });
+    if (test.creep?.status === 'IN_PROGRESS' || test.creep?.status === 'COMPLETED') return res.status(409).json({ message: 'The creep observation has already started.' });
+    const body = z.object({ actualLoad: z.number().finite().nonnegative(), actualLoadUnit: z.enum(['mg', 'g', 'kg', 't']), initialIndication: z.number().finite(), indicationUnit: z.enum(['mg', 'g', 'kg', 't']), temperatureStart: z.number().finite().optional(), notes: z.string().optional().default('') }).parse(req.body);
+    const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const actualLoad = convertMass(body.actualLoad, body.actualLoadUnit, unit); if (actualLoad > Number(snapshot.max)) return res.status(400).json({ message: 'Actual load must not exceed Max.' });
+    const initialIndication = convertMass(body.initialIndication, body.indicationUnit, unit); const mpe = calculateVariationMpe(snapshot, actualLoad, unit); if (!mpe.supported) return res.status(400).json({ message: mpe.reason });
+    const now = new Date(); test.creep = { status: 'IN_PROGRESS', result: 'INCOMPLETE', startedAt: now, checkpoints: [{ checkpoint: 'T0', minutes: 0, indication: initialIndication, unit, temperature: body.temperatureStart, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user) }], observation: { actualLoad, inputActualLoad: body.actualLoad, unit: body.actualLoadUnit, indication: initialIndication, indicationUnit: body.indicationUnit, mpeValue: mpe.mpeValue, mpeUnit: mpe.mpeUnit, mpeRuleReference: mpe.ruleReference, mpeRuleSetId: mpe.ruleSetId, mpeRuleVersion: mpe.ruleVersion, sourceClause: VARIATION_WITH_TIME_SOURCE, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes } }; test.environmentalReadings = body.temperatureStart === undefined ? environmentalTemperatures(report, test) : [...environmentalTemperatures(report, test), body.temperatureStart];
+    test.events.push({ action: 'VARIATION_WITH_TIME_CREEP_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { actualLoad, unit, mpe: mpe.mpeValue } });
+    test.markModified('creep'); test.markModified('environmentalReadings'); await test.save(); res.json({ test: publicVariationWithTime(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/variation-with-time/creep/checkpoint', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test || test.creep?.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Start the creep observation first.' });
+    const body = z.object({ checkpoint: z.enum(['T15', 'T30', 'T60', 'T120', 'T180', 'T240']), indication: z.number().finite(), indicationUnit: z.enum(['mg', 'g', 'kg', 't']), temperature: z.number().finite().optional(), notes: z.string().optional().default('') }).parse(req.body);
+    const checkpoint = (test.plan?.creepCheckpoints || []).find((item: any) => item.checkpoint === body.checkpoint); if (!checkpoint) return res.status(400).json({ message: 'Checkpoint is not part of the A.4.11 plan.' });
+    if (test.creep.observation?.earlyTerminationAllowed === true) return res.status(409).json({ message: 'The 30-minute creep criteria were satisfied; no later checkpoint is required.', code: 'CREEP_EARLY_TERMINATION_ALLOWED' });
+    const existing = (test.creep.checkpoints || []).find((item: any) => item.checkpoint === body.checkpoint); if (existing) return res.status(409).json({ message: 'This checkpoint has already been recorded.' });
+    const ordered = ['T15', 'T30', 'T60', 'T120', 'T180', 'T240']; const previous = ordered.slice(0, ordered.indexOf(body.checkpoint)).find((code: string) => !(test.creep.checkpoints || []).some((item: any) => item.checkpoint === code)); if (previous) return res.status(409).json({ message: `Record ${previous} before ${body.checkpoint}.`, code: 'CHECKPOINT_ORDER_REQUIRED' });
+    const elapsed = Date.now() - new Date(test.creep.startedAt).getTime(); if (elapsed < Number(checkpoint.minutes) * 60 * 1000) return res.status(409).json({ message: `${body.checkpoint} is not yet available. Use the persisted timer.` , code: 'CHECKPOINT_NOT_DUE' });
+    const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const indication = convertMass(body.indication, body.indicationUnit, unit); const now = new Date(); test.creep.checkpoints.push({ checkpoint: body.checkpoint, minutes: checkpoint.minutes, indication, unit, temperature: body.temperature, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user) }); if (body.temperature !== undefined) test.environmentalReadings = [...(test.environmentalReadings || []), body.temperature];
+    const checkpoints: any[] = test.creep.checkpoints; const i0 = Number(checkpoints.find(item => item.checkpoint === 'T0')?.indication); const i15 = checkpoints.find(item => item.checkpoint === 'T15')?.indication; const i30 = checkpoints.find(item => item.checkpoint === 'T30')?.indication; const i240 = checkpoints.find(item => item.checkpoint === 'T240')?.indication; const evaluated = evaluateCreep({ i0, i15, i30, i240, e: Number(snapshot.e), mpeValue: Number(test.creep.observation?.mpeValue), temperatures: test.environmentalReadings || [] }); test.creep.observation = { ...((test.creep.observation as any)?.toObject?.() || test.creep.observation || {}), delta30: evaluated.delta30, delta15_30: evaluated.delta15_30, delta4h: evaluated.delta4h, temperatureVariation: evaluated.temperatureVariation, temperatureCondition: evaluated.temperatureCondition, extendedCriterion: evaluated.extendedCriterion, earlyTerminationAllowed: evaluated.earlyTerminationAllowed, result: evaluated.result, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes || test.creep.observation?.notes }; test.creep.result = evaluated.result; test.events.push({ action: 'VARIATION_WITH_TIME_CREEP_CHECKPOINT_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { checkpoint: body.checkpoint, result: evaluated.result } });
+    test.markModified('creep'); test.markModified('environmentalReadings'); await test.save(); res.json({ test: publicVariationWithTime(test), checkpoint: body.checkpoint, evaluation: evaluated });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/variation-with-time/creep/complete', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test || test.creep?.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'The creep observation is not ready to complete.' });
+    const checkpoints: any[] = test.creep.checkpoints || []; const i0 = checkpoints.find(item => item.checkpoint === 'T0')?.indication; const i15 = checkpoints.find(item => item.checkpoint === 'T15')?.indication; const i30 = checkpoints.find(item => item.checkpoint === 'T30')?.indication; const i240 = checkpoints.find(item => item.checkpoint === 'T240')?.indication; const snapshot: any = test.instrumentSnapshot; const evaluation = evaluateCreep({ i0, i15, i30, i240, e: Number(snapshot.e), mpeValue: Number(test.creep.observation?.mpeValue), temperatures: test.environmentalReadings || [] }); if (!checkpoints.some(item => item.checkpoint === 'T15') || !checkpoints.some(item => item.checkpoint === 'T30')) return res.status(409).json({ message: 'Record T15 and T30 before completing the creep procedure.' }); if (evaluation.requiredCheckpoint === 'T240' && !checkpoints.some(item => item.checkpoint === 'T240')) return res.status(409).json({ message: 'The 30-minute criteria were not satisfied. Continue the observation through T240.' }); if (evaluation.temperatureCondition !== 'SATISFIED') return res.status(409).json({ message: 'Record at least two temperatures and keep temperature variation at or below 2 °C before completing creep.' }); if (evaluation.result === 'INCOMPLETE') return res.status(409).json({ message: 'Complete the required creep observations before continuing.' });
+    test.creep.status = 'COMPLETED'; test.creep.result = evaluation.result; test.creep.completedAt = new Date(); test.creep.observation = { ...((test.creep.observation as any)?.toObject?.() || test.creep.observation || {}), ...evaluation }; test.zeroReturn.status = 'AVAILABLE'; test.events.push({ action: 'VARIATION_WITH_TIME_CREEP_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluation.result, requiredCheckpoint: evaluation.requiredCheckpoint } }); test.markModified('creep'); test.markModified('zeroReturn'); await test.save(); res.json({ test: publicVariationWithTime(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/variation-with-time/zero-return/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test || test.creep?.status !== 'COMPLETED') return res.status(409).json({ message: 'Complete Creep before starting Zero Return.' });
+    const snapshot: any = test.instrumentSnapshot; if (snapshot.rangeType !== 'single-range' || snapshot.intervalType !== 'single-interval') return res.status(409).json({ message: 'This Zero Return execution requires configured e1/ei data for multi-range or multi-interval instruments.', code: 'CONFIGURATION_REQUIRED' });
+    const body = z.object({ zeroTrackingOffConfirmed: z.literal(true), actualLoad: z.number().finite().nonnegative(), actualLoadUnit: z.enum(['mg', 'g', 'kg', 't']), zeroBefore: z.number().finite(), zeroBeforeUnit: z.enum(['mg', 'g', 'kg', 't']), stabilizedBefore: z.literal(true), notes: z.string().optional().default('') }).parse(req.body); const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const actualLoad = convertMass(body.actualLoad, body.actualLoadUnit, unit); if (actualLoad > Number(snapshot.max)) return res.status(400).json({ message: 'Actual load must not exceed Max.' }); const zeroBefore = convertMass(body.zeroBefore, body.zeroBeforeUnit, unit); const now = new Date(); test.zeroReturn = { status: 'IN_PROGRESS', result: 'INCOMPLETE', startedAt: now, checkpoints: [], observation: { actualLoad, inputActualLoad: body.actualLoad, unit: body.actualLoadUnit, zeroBefore, zeroAfter: undefined, allowedLimit: Number(snapshot.e) * 0.5, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes, zeroTrackingOffConfirmed: true, stabilizedBefore: true } }; test.events.push({ action: 'VARIATION_WITH_TIME_ZERO_RETURN_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { actualLoad, unit } }); test.markModified('zeroReturn'); await test.save(); res.json({ test: publicVariationWithTime(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/variation-with-time/zero-return/complete', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test || test.zeroReturn?.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Start the Zero Return observation first.' }); if (Date.now() - new Date(test.zeroReturn.startedAt).getTime() < 30 * 60 * 1000) return res.status(409).json({ message: 'The 30-minute loading period is not complete yet.', code: 'ZERO_RETURN_NOT_DUE' });
+    const body = z.object({ zeroAfter: z.number().finite(), zeroAfterUnit: z.enum(['mg', 'g', 'kg', 't']), stabilizedAfter: z.literal(true), notes: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const zeroAfter = convertMass(body.zeroAfter, body.zeroAfterUnit, unit); const zeroBefore = Number(test.zeroReturn.observation.zeroBefore); const evaluated = evaluateZeroReturn(zeroBefore, zeroAfter, Number(snapshot.e) * 0.5); test.zeroReturn.observation = { ...((test.zeroReturn.observation as any)?.toObject?.() || test.zeroReturn.observation || {}), inputZeroAfter: body.zeroAfter, zeroAfter, zeroAfterUnit: body.zeroAfterUnit, zeroReturnDeviation: evaluated.zeroReturnDeviation, allowedLimit: evaluated.allowedLimit, result: evaluated.result, stabilizedAfter: true, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes || test.zeroReturn.observation?.notes }; test.zeroReturn.status = 'COMPLETED'; test.zeroReturn.result = evaluated.result; test.zeroReturn.completedAt = new Date(); test.status = 'COMPLETED'; test.result = test.creep.result === 'FAIL' || evaluated.result === 'FAIL' ? 'FAIL' : 'PASS'; test.completedAt = new Date(); test.events.push({ action: 'VARIATION_WITH_TIME_ZERO_RETURN_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluated.result } }); test.markModified('zeroReturn'); await test.save(); res.json({ test: publicVariationWithTime(test) });
+  } catch (e) { next(e); }
+});
+
+const publicStability = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const stabilityState = async (report: any) => {
+  const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
+  const applicability: any = route.tests.find(test => test.code === 'A.4.12');
+  const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id });
+  const fingerprint = stabilityFingerprint(report.instrument || {});
+  const stale = !!test && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  if (stale && test.status !== 'REVALIDATION_REQUIRED' && report.status !== 'COMPLETED') {
+    test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.events.push({ action: 'STABILITY_REVALIDATION_REQUIRED', testerId: test.testerId, testerNameSnapshot: test.testerNameSnapshot, timestamp: new Date(), metadata: { previousFingerprint: test.sourceFingerprint, currentFingerprint: fingerprint } }); test.markModified('events'); await test.save();
+  }
+  return { route, applicability, test, fingerprint, stale };
+};
+
+const stabilityPrerequisitesComplete = async (report: any, route: any) => {
+  const target = route.tests.find((item: any) => item.code === 'A.4.12');
+  const prerequisites = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.executionSupported !== false && item.order < (target?.order || 0));
+  const [zeroChecking, zeroSettingBeforeLoading, performance, multipleIndicating, tare, eccentricity, discrimination, sensitivity, repeatability, variationWithTime] = await Promise.all([
+    ZeroCheckingTest.findOne({ reportId: report._id }), ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }), WeighingPerformanceTest.findOne({ reportId: report._id }), MultipleIndicatingDeviceTest.findOne({ reportId: report._id }), TareTest.findOne({ reportId: report._id }), EccentricityTest.findOne({ reportId: report._id }), DiscriminationTest.findOne({ reportId: report._id }), SensitivityTest.findOne({ reportId: report._id }), RepeatabilityTest.findOne({ reportId: report._id }), VariationWithTimeTest.findOne({ reportId: report._id }),
+  ]);
+  const completed: Record<string, boolean> = { 'A.4.2': zeroChecking?.status === 'COMPLETED', 'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED', 'A.4.4': performance?.status === 'COMPLETED', 'A.4.5': multipleIndicating?.status === 'PASS' || multipleIndicating?.status === 'FAIL', 'A.4.6': tare?.status === 'COMPLETED', 'A.4.7': eccentricity?.status === 'COMPLETED', 'A.4.8': discrimination?.status === 'COMPLETED', 'A.4.9': sensitivity?.status === 'COMPLETED', 'A.4.10': repeatability?.status === 'COMPLETED', 'A.4.11': variationWithTime?.status === 'COMPLETED' };
+  return prerequisites.every((item: any) => completed[item.code] === true);
+};
+
+const sourceEvidence = async (report: any, sourcePhase: 'A.4.2.3' | 'A.4.6.2') => {
+  if (sourcePhase === 'A.4.2.3') {
+    const source: any = await ZeroCheckingTest.findOne({ reportId: report._id });
+    const phase: any = source?.phases?.find((item: any) => item.code === sourcePhase);
+    return phase?.status === 'COMPLETED' ? { testId: String(source._id), phaseCode: sourcePhase, result: phase.result, observations: phase.observations, calculations: phase.calculations } : null;
+  }
+  const source: any = await TareTest.findOne({ reportId: report._id });
+  const phase: any = source?.phases?.find((item: any) => item.code === sourcePhase);
+  return phase?.status === 'COMPLETED' ? { testId: String(source._id), phaseCode: sourcePhase, result: phase.result, observations: phase.observations, calculations: phase.calculations } : null;
+};
+
+const activateNextStabilityPhase = (test: any) => {
+  const next = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && item.status === 'LOCKED');
+  if (next) next.status = 'AVAILABLE';
+};
+
+r.get('/:id/stability-of-equilibrium', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await stabilityState(report); res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, test: publicStability(state.test) }); } catch (e) { next(e); }
+});
+
+r.post('/:id/stability-of-equilibrium/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await stabilityState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.12 is not applicable for this instrument.', code: 'CONFIGURATION_REQUIRED' });
+    if (state.applicability.executionSupported !== true) return res.status(409).json({ message: state.applicability.reason, code: 'PROCEDURE_MODULE_REQUIRED' });
+    if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate A.4.12 before continuing.', code: 'REVALIDATION_REQUIRED' });
+    if (!(await stabilityPrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Stability of equilibrium.', code: 'DEPENDENCY_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const instrument: any = report.instrument || {}; const unit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+      const snapshot = { accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, unit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, rangeType: instrument.rangeType, intervalType: instrument.intervalType, stableEquilibriumFunction: instrument.stableEquilibriumFunction, printingCapability: instrument.printingCapability, dataStorageCapability: instrument.dataStorageCapability, zeroSettingCapability: instrument.zeroSettingCapability, tareCapability: instrument.tareCapability, differentiatedScaleDivisions: instrument.differentiatedScaleDivisions, mobileInstrument: instrument.mobileInstrument, portableRoadVehicleInstrument: instrument.portableRoadVehicleInstrument };
+      const plan = stabilityPlan(snapshot);
+      const phases = (state.applicability.branches || []).map((branch: any) => ({ code: branch.code, name: branch.name, applicability: branch.status, status: branch.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : 'LOCKED', result: branch.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : 'INCOMPLETE', reason: branch.reason, source: branch.source, method: branch.method, dependency: branch.dependency }));
+      const firstApplicable = phases.find((phase: any) => phase.applicability === 'APPLICABLE'); if (firstApplicable) firstApplicable.status = 'AVAILABLE';
+      test = new StabilityOfEquilibriumTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: STABILITY_TEST_VERSION, engineVersion: STABILITY_ENGINE_VERSION, ruleSetId: STABILITY_RULE_SET, source: STABILITY_SOURCE, method: 'STABILITY_OF_EQUILIBRIUM', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, plan, phases, startedAt: new Date(), events: [{ action: 'STABILITY_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { source: STABILITY_SOURCE } }] });
+      await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, test: publicStability(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/stability-of-equilibrium/documentation', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); if (test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'Revalidation is required before editing this test.', code: 'REVALIDATION_REQUIRED' }); const body = z.object({
+    stableEquilibriumPrinciple: text, stableEquilibriumCriterion: text, adjustableParameters: text, nonAdjustableParameters: text, parameterSecurityMethod: text, worstCaseAdjustment: text,
+    documentationAvailable: z.enum(['Yes', 'No']), basicPrincipleDocumented: z.enum(['Yes', 'No']), criteriaDocumented: z.enum(['Yes', 'No']), adjustableParametersDocumented: z.enum(['Yes', 'No', 'Not applicable']), nonAdjustableParametersDocumented: z.enum(['Yes', 'No', 'Not applicable']), parameterSecurityDocumented: z.enum(['Yes', 'No', 'Not applicable']), worstCaseAdjustmentIdentified: z.enum(['Yes', 'No', 'Not applicable']),
+    manufacturerDocumentationReference: z.string().optional().default(''), evidenceReference: z.string().optional().default('')
+  }).parse(req.body); test.documentation = { ...body, reviewedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.1'); phase.status = 'COMPLETED'; phase.result = evaluateDocumentationReview(body); phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_DOCUMENTATION_REVIEWED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: phase.result } }); test.markModified('documentation'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/stability-of-equilibrium/setup', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); const body = z.object({ actualLoad: z.number().finite().nonnegative(), actualLoadUnit: z.enum(['mg', 'g', 'kg', 't']), notes: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const actualLoad = normalizeMass(body.actualLoad, body.actualLoadUnit, unit); if (actualLoad > Number(snapshot.max)) return res.status(400).json({ message: 'Actual test load must not exceed Max.' }); test.setup = { targetLoad: test.plan?.targetLoad, actualLoad: { value: actualLoad, unit }, inputActualLoad: body.actualLoad, inputUnit: body.actualLoadUnit, notes: body.notes, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; test.events.push({ action: 'STABILITY_SETUP_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date() }); test.markModified('setup'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/stability-of-equilibrium/print-storage/start', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test || !test.setup) return res.status(409).json({ message: 'Record the actual stability-test load first.' }); if (!test.documentation) return res.status(409).json({ message: 'Complete the documentation review first.' }); const branch: any = test.phases.find((item: any) => item.code === 'A.4.12.2'); if (!branch || branch.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'Printing/data-storage stability is not applicable.', code: 'NOT_APPLICABLE' }); const body = z.object({ functionTested: z.enum(['PRINT', 'STORE']), disturbanceConfirmed: z.literal(true), initiatedImmediatelyConfirmed: z.literal(true) }).parse(req.body); const now = new Date(); test.printStorage = { ...((test.printStorage as any)?.toObject?.() || test.printStorage || {}), functionTested: body.functionTested, disturbanceConfirmed: true, initiatedImmediatelyConfirmed: true, commandStartedAt: now, observationStartAt: now, status: 'IN_PROGRESS', testerId: req.user._id, testerNameSnapshot: userName(req.user) }; branch.status = 'IN_PROGRESS'; test.events.push({ action: 'STABILITY_PRINT_STORAGE_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { functionTested: body.functionTested } }); test.markModified('printStorage'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/stability-of-equilibrium/print-storage/complete', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test?.printStorage || test.printStorage.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Start the five-second print/data-storage observation first.' }); if (Date.now() - new Date(test.printStorage.commandStartedAt).getTime() < 5000) return res.status(409).json({ message: 'The five-second observation period is not complete yet.', code: 'OBSERVATION_NOT_DUE' }); const body = z.object({ printedValue: z.number().finite(), printedValueUnit: z.enum(['mg', 'g', 'kg', 't']), observedValues: z.array(z.number().finite()).min(1), observedValueUnit: z.enum(['mg', 'g', 'kg', 't']), evidence: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const printedValue = normalizeMass(body.printedValue, body.printedValueUnit, unit); const observedValues = body.observedValues.map(value => normalizeMass(value, body.observedValueUnit, unit)); const interval = test.plan?.stabilityInterval?.value; if (!Number.isFinite(interval)) return res.status(409).json({ message: 'The configured d/e stability interval is unavailable.', code: 'CONFIGURATION_REQUIRED' }); const evaluated = evaluateStabilitySequence({ values: observedValues, printedValue, interval: Number(interval) }); const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.2'); test.printStorage = { ...((test.printStorage as any)?.toObject?.() || test.printStorage || {}), printedValue: { value: printedValue, unit }, inputPrintedValue: body.printedValue, printedValueUnit: body.printedValueUnit, observedValues: observedValues.map(value => ({ value, unit })), inputObservedValues: body.observedValues, observedValueUnit: body.observedValueUnit, observationEndAt: new Date(), stabilityInterval: test.plan.stabilityInterval, evaluation: evaluated, evidence: body.evidence, result: evaluated.result, status: 'COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user) }; phase.status = 'COMPLETED'; phase.result = evaluated.result; phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_PRINT_STORAGE_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluated.result } }); test.markModified('printStorage'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test), evaluation: evaluated }); } catch (e) { next(e); }
+});
+
+async function saveStabilityRepetition(req: any, res: any, sourcePhase: 'A.4.2.3' | 'A.4.6.2', branchCode: 'A.4.12.3' | 'A.4.12.4') {
+  const report = await getOwnedReport(req);
+  if (!report) return res.status(404).json({ message: 'Test report not found.' });
+  const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id });
+  if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' });
+  const branch: any = test.phases.find((item: any) => item.code === branchCode);
+  if (!branch || branch.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'This stability branch is not applicable.', code: 'NOT_APPLICABLE' });
+  const source = await sourceEvidence(report, sourcePhase);
+  if (!source) return res.status(409).json({ message: `Complete ${sourcePhase} before recording this stability branch.`, code: 'SOURCE_EVIDENCE_REQUIRED' });
+  const body = z.object({
+    repetition: z.number().int().min(1).max(STABILITY_REPETITIONS),
+    disturbanceConfirmed: z.literal(true),
+    operationAttemptedImmediately: z.literal(true),
+    blockedBeforeStable: z.literal(true),
+    stableAfterConfirmed: z.literal(true),
+    zeroTrackingOffConfirmed: z.literal(true),
+    notes: z.string().optional().default(''),
+    complete: z.boolean().optional().default(true),
+  }).parse(req.body);
+  const existing: any[] = branch.observations || [];
+  const observation = {
+    repetition: body.repetition,
+    disturbanceConfirmed: true,
+    operationAttemptedImmediately: true,
+    blockedBeforeStable: true,
+    stableAfterConfirmed: true,
+    zeroTrackingOffConfirmed: true,
+    sourceTestId: source.testId,
+    sourcePhase,
+    sourceResult: source.result,
+    sourceCalculations: source.calculations,
+    notes: body.notes,
+    recordedAt: new Date(),
+    testerId: req.user._id,
+    testerNameSnapshot: userName(req.user),
+  };
+  branch.observations = [...existing.filter(item => item.repetition !== body.repetition), observation].sort((a, b) => a.repetition - b.repetition);
+  branch.status = branch.observations.length === STABILITY_REPETITIONS && body.complete ? 'COMPLETED' : 'IN_PROGRESS';
+  branch.result = branch.status === 'COMPLETED' ? 'PASS' : 'INCOMPLETE';
+  if (branch.status === 'COMPLETED') branch.completedAt = new Date();
+  activateNextStabilityPhase(test);
+  test[branchCode === 'A.4.12.3' ? 'zeroSetting' : 'tare'] = { repetitions: branch.observations, sourceEvidence: source, requiredRepetitions: STABILITY_REPETITIONS, result: branch.result };
+  test.events.push({ action: 'STABILITY_REPETITION_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { branchCode, repetition: body.repetition, sourcePhase } });
+  test.markModified('phases');
+  test.markModified(branchCode === 'A.4.12.3' ? 'zeroSetting' : 'tare');
+  await test.save();
+  return res.json({ test: publicStability(test), branch });
+}
+
+r.patch('/:id/stability-of-equilibrium/zero-setting/repetitions/:repetition', async (req: any, res, next) => { try { req.body.repetition = Number(req.params.repetition); await saveStabilityRepetition(req, res, 'A.4.2.3', 'A.4.12.3'); } catch (e) { next(e); } });
+r.patch('/:id/stability-of-equilibrium/tare/repetitions/:repetition', async (req: any, res, next) => { try { req.body.repetition = Number(req.params.repetition); await saveStabilityRepetition(req, res, 'A.4.6.2', 'A.4.12.4'); } catch (e) { next(e); } });
+
+r.patch('/:id/stability-of-equilibrium/continuous-disturbance', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); const applicable = (test.plan?.applicableOperations || []) as StabilityOperation[]; const body = z.object({ continuousDisturbanceConfirmed: z.literal(true), operations: z.array(z.object({ operation: z.enum(['PRINT', 'STORE', 'ZERO', 'TARE']), observed: z.enum(['BLOCKED', 'EXECUTED']) })).min(1) }).parse(req.body); const provided = new Map(body.operations.map(item => [item.operation, item.observed])); if (applicable.some(operation => !provided.has(operation))) return res.status(400).json({ message: 'Record the observed inhibition result for every applicable operation.' }); const evaluated = applicable.every(operation => provided.get(operation) === 'BLOCKED') ? 'PASS' : 'FAIL'; test.continuousDisturbance = { continuousDisturbanceConfirmed: true, operations: body.operations, result: evaluated, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.5'); phase.status = 'COMPLETED'; phase.result = evaluated; phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_CONTINUOUS_DISTURBANCE_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluated } }); test.markModified('continuousDisturbance'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test), result: evaluated }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/stability-of-equilibrium/complete', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); if (test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'Revalidation is required before completing A.4.12.', code: 'REVALIDATION_REQUIRED' }); const required = test.phases.filter((phase: any) => phase.applicability === 'APPLICABLE'); if (required.some((phase: any) => phase.status !== 'COMPLETED')) return res.status(409).json({ message: 'Complete every applicable A.4.12 branch before completing the test.', code: 'INCOMPLETE' }); const result = required.some((phase: any) => phase.result === 'FAIL') ? 'FAIL' : 'PASS'; test.result = result; test.status = 'COMPLETED'; test.completedAt = new Date(); test.events.push({ action: 'STABILITY_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicStability(test) }); } catch (e) { next(e); }
+});
+
+const publicInfluenceFactors = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const influenceFactorsState = async (report: any) => {
+  const profile = instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>);
+  const route = generateApplicability(profile);
+  const applicability: any = route.tests.find(test => test.code === 'A.5');
+  const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id });
+  const fingerprint = influenceFactorsFingerprint(report.instrument || {});
+  const stale = !!test && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  if (stale && test.status !== 'REVALIDATION_REQUIRED' && report.status !== 'COMPLETED') {
+    test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.completedAt = undefined;
+    test.events.push({ action: 'INFLUENCE_FACTORS_REVALIDATION_REQUIRED', testerId: test.testerId, testerNameSnapshot: test.testerNameSnapshot, timestamp: new Date(), metadata: { previousFingerprint: test.sourceFingerprint, currentFingerprint: fingerprint } });
+    test.markModified('events'); await test.save();
+  }
+  return { route, applicability, test, fingerprint, stale };
+};
+
+const influenceFactorsPrerequisitesComplete = async (report: any, route: any) => {
+  const target = route.tests.find((item: any) => item.code === 'A.5');
+  const prerequisites = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.executionSupported !== false && item.order < (target?.order || 0));
+  const [zeroChecking, zeroSetting, performance, multipleIndicating, tare, eccentricity, discrimination, sensitivity, repeatability, variation, stability] = await Promise.all([
+    ZeroCheckingTest.findOne({ reportId: report._id }), ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }), WeighingPerformanceTest.findOne({ reportId: report._id }), MultipleIndicatingDeviceTest.findOne({ reportId: report._id }), TareTest.findOne({ reportId: report._id }), EccentricityTest.findOne({ reportId: report._id }), DiscriminationTest.findOne({ reportId: report._id }), SensitivityTest.findOne({ reportId: report._id }), RepeatabilityTest.findOne({ reportId: report._id }), VariationWithTimeTest.findOne({ reportId: report._id }), StabilityOfEquilibriumTest.findOne({ reportId: report._id }),
+  ]);
+  const completed: Record<string, boolean> = { 'A.4.2': zeroChecking?.status === 'COMPLETED', 'A.4.3': zeroSetting?.status === 'COMPLETED', 'A.4.4': performance?.status === 'COMPLETED', 'A.4.5': ['PASS', 'FAIL'].includes(multipleIndicating?.status || ''), 'A.4.6': tare?.status === 'COMPLETED', 'A.4.7': eccentricity?.status === 'COMPLETED', 'A.4.8': discrimination?.status === 'COMPLETED', 'A.4.9': sensitivity?.status === 'COMPLETED', 'A.4.10': repeatability?.status === 'COMPLETED', 'A.4.11': variation?.status === 'COMPLETED', 'A.4.12': stability?.status === 'COMPLETED', 'A.4.13': route.tests.find((item: any) => item.code === 'A.4.13')?.status !== 'APPLICABLE' };
+  return prerequisites.every((item: any) => completed[item.code] === true);
+};
+
+const activateNextInfluencePhase = (test: any) => {
+  const next = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && item.status === 'LOCKED');
+  if (next) next.status = 'AVAILABLE';
+};
+
+const influenceSnapshot = (report: any) => ({ ...((report.instrument as any)?.toObject?.() || report.instrument || {}) });
+
+r.get('/:id/influence-factors', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await influenceFactorsState(report);
+    if (!(await influenceFactorsPrerequisitesComplete(report, state.route))) return res.status(409).json({ code: 'DEPENDENCY_REQUIRED', message: 'Complete all required A.4 performance tests before opening Influence Factors.' });
+    res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, test: publicInfluenceFactors(state.test) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/influence-factors/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await influenceFactorsState(report);
+    if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.5 requires a complete instrument configuration.', code: 'CONFIGURATION_REQUIRED' });
+    if (state.applicability.executionSupported !== true) return res.status(409).json({ message: state.applicability.reason || 'The A.5 execution module is not available for this configuration.', code: 'PROCEDURE_MODULE_REQUIRED' });
+    if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate A.5 before continuing.', code: 'REVALIDATION_REQUIRED' });
+    if (!(await influenceFactorsPrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Influence Factors.', code: 'DEPENDENCY_REQUIRED' });
+    let test: any = state.test;
+    if (!test) {
+      const snapshot: any = influenceSnapshot(report);
+      const phases = (state.applicability.branches || []).map((branch: any) => ({ code: branch.code, name: branch.name, applicability: branch.status, status: branch.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : 'LOCKED', result: branch.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : 'INCOMPLETE', reason: branch.reason, source: branch.source, method: branch.method, executionSupported: branch.executionSupported }));
+      const first = phases.find((phase: any) => phase.applicability === 'APPLICABLE'); if (first) first.status = 'AVAILABLE';
+      test = new InfluenceFactorsTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: INFLUENCE_FACTORS_TEST_VERSION, engineVersion: INFLUENCE_FACTORS_ENGINE_VERSION, ruleSetId: INFLUENCE_FACTORS_RULE_SET, source: INFLUENCE_FACTORS_SOURCE, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, plan: influenceFactorsPlan(snapshot), phases, startedAt: new Date(), events: [{ action: 'INFLUENCE_FACTORS_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { source: INFLUENCE_FACTORS_SOURCE } }] });
+      await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, test: publicInfluenceFactors(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/influence-factors/setup', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Influence Factors first.' }); if (test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'Revalidation is required before editing A.5.', code: 'REVALIDATION_REQUIRED' }); const body = z.object({ environmentalConditionsStableConfirmed: z.literal(true), notes: z.string().optional().default('') }).parse(req.body); test.setup = { ...body, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; test.events.push({ action: 'INFLUENCE_FACTORS_SETUP_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date() }); test.markModified('setup'); await test.save(); res.json({ test: publicInfluenceFactors(test) }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/influence-factors/tilting', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test?.setup) return res.status(409).json({ message: 'Complete A.5 setup before tilting.' }); const phase: any = test.phases.find((item: any) => item.code === 'A.5.1'); if (!phase || phase.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'A.5.1 is not executable for this configuration.', code: 'NOT_APPLICABLE' }); const body = z.object({ zeroSettingOffConfirmed: z.literal(true), observations: z.array(z.object({ direction: z.enum(['LONGITUDINAL', 'TRANSVERSE']), position: z.enum(['NO_LOAD', 'LOW_LOAD', 'MAX_LOAD']), requiredTilt: z.number().finite().positive().optional(), actualTilt: z.number().finite().positive().optional(), load: z.number().finite().nonnegative(), indication: z.number().finite(), deltaL: z.number().finite().nonnegative(), zeroError: z.number().finite().optional(), unit: z.enum(['mg', 'g', 'kg', 't']) })).min(6), notes: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const observations = body.observations.map(item => { const load = convertMass(item.load, item.unit, unit); const indication = convertMass(item.indication, item.unit, unit); const deltaL = convertMass(item.deltaL, item.unit, unit); const calculation = calculateInfluenceFactorsError({ load, indication, deltaL, e: Number(snapshot.e), zeroError: item.zeroError === undefined ? 0 : convertMass(item.zeroError, item.unit, unit) }); const mpe = evaluateInfluenceFactorsCompliance(snapshot, load, unit, calculation.Ec); return { raw: item, load, indication, deltaL, ...calculation, mpeValue: mpe.supported ? mpe.mpeValue : undefined, mpeUnit: unit, compliance: mpe.compliance, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; }); const requiredPositions = new Set(['LONGITUDINAL:NO_LOAD', 'LONGITUDINAL:LOW_LOAD', 'LONGITUDINAL:MAX_LOAD', 'TRANSVERSE:NO_LOAD', 'TRANSVERSE:LOW_LOAD', 'TRANSVERSE:MAX_LOAD']); if (observations.some((item: any) => !requiredPositions.has(`${item.raw.direction}:${item.raw.position}`))) return res.status(400).json({ message: 'Record no-load, lowest-transition, and close-to-Max observations for both tilt directions.' }); const result = observations.some((item: any) => item.compliance === 'FAIL') ? 'FAIL' : observations.every((item: any) => item.compliance === 'PASS') ? 'PASS' : 'INCOMPLETE'; test.tilting = { zeroSettingOffConfirmed: true, observations, result, notes: body.notes, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; phase.status = result === 'INCOMPLETE' ? 'IN_PROGRESS' : 'COMPLETED'; phase.result = result; if (phase.status === 'COMPLETED') phase.completedAt = new Date(); if (phase.status === 'COMPLETED') activateNextInfluencePhase(test); test.events.push({ action: 'INFLUENCE_FACTORS_TILTING_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); test.markModified('tilting'); test.markModified('phases'); await test.save(); res.json({ test: publicInfluenceFactors(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/influence-factors/warm-up', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test?.setup) return res.status(409).json({ message: 'Complete A.5 setup before warm-up.' }); const phase: any = test.phases.find((item: any) => item.code === 'A.5.2'); if (!phase || phase.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'A.5.2 is not applicable.', code: 'NOT_APPLICABLE' }); const body = z.object({ disconnectedAt: z.string(), connectedAt: z.string(), stabilizationAt: z.string(), eightHourPreconditionConfirmed: z.literal(true), observations: z.array(z.object({ checkpoint: z.enum(['T5', 'T15', 'T30']), observedAt: z.string(), load: z.number().finite().nonnegative(), indication: z.number().finite(), deltaL: z.number().finite().nonnegative(), zeroError: z.number().finite(), unit: z.enum(['mg', 'g', 'kg', 't']) })).length(3), notes: z.string().optional().default('') }).parse(req.body); const disconnected = new Date(body.disconnectedAt); const connected = new Date(body.connectedAt); if ([disconnected, connected, new Date(body.stabilizationAt)].some(item => Number.isNaN(item.getTime())) || connected.getTime() - disconnected.getTime() < 8 * 60 * 60 * 1000) return res.status(400).json({ message: 'The instrument must be disconnected for at least 8 hours before reconnection.' }); const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const observations = body.observations.map(item => { const load = convertMass(item.load, item.unit, unit); const indication = convertMass(item.indication, item.unit, unit); const deltaL = convertMass(item.deltaL, item.unit, unit); const calculation = calculateInfluenceFactorsError({ load, indication, deltaL, e: Number(snapshot.e), zeroError: convertMass(item.zeroError, item.unit, unit) }); const mpe = evaluateInfluenceFactorsCompliance(snapshot, load, unit, calculation.Ec); return { ...item, load, indication, deltaL, ...calculation, mpeValue: mpe.supported ? mpe.mpeValue : undefined, result: mpe.compliance, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; }); const result = observations.every((item: any) => item.result === 'PASS') ? 'PASS' : observations.some((item: any) => item.result === 'FAIL') ? 'FAIL' : 'INCOMPLETE'; test.warmUp = { ...body, disconnectedAt: disconnected, connectedAt: connected, stabilizationAt: new Date(body.stabilizationAt), observations, result }; phase.status = result === 'INCOMPLETE' ? 'IN_PROGRESS' : 'COMPLETED'; phase.result = result; if (phase.status === 'COMPLETED') { phase.completedAt = new Date(); activateNextInfluencePhase(test); } test.events.push({ action: 'INFLUENCE_FACTORS_WARMUP_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); test.markModified('warmUp'); test.markModified('phases'); await test.save(); res.json({ test: publicInfluenceFactors(test) }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/influence-factors/temperature', async (req: any, res, next) => {
+   try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test?.setup) return res.status(409).json({ message: 'Complete A.5 setup before temperature tests.' }); const phase: any = test.phases.find((item: any) => item.code === 'A.5.3'); if (!phase || phase.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'A.5.3 is not applicable.', code: 'NOT_APPLICABLE' }); const body = z.object({ points: z.array(z.object({ pointId: z.string().min(1), targetTemperature: z.number().finite(), actualTemperature: z.number().finite(), stabilizedAt: z.string(), twoHourStabilityConfirmed: z.literal(true), heatingCoolingRate: z.number().finite().nonnegative(), relativeHumidity: z.number().finite().min(0).max(100).optional(), absoluteHumidity: z.number().finite().nonnegative().optional(), pressure: z.number().finite().optional(), load: z.number().finite().nonnegative(), indication: z.number().finite(), deltaL: z.number().finite().nonnegative(), zeroError: z.number().finite(), unit: z.enum(['mg', 'g', 'kg', 't']) })).min(2), zeroEffects: z.array(z.object({ fromPointId: z.string(), toPointId: z.string(), zeroBefore: z.number().finite(), zeroAfter: z.number().finite(), intervalCelsius: z.number().finite().positive() })).optional().default([]), notes: z.string().optional().default('') }).parse(req.body); const expectedPointIds = (test.plan?.temperature?.targets || []).map((item: any) => item.id); if (body.points.length !== expectedPointIds.length || expectedPointIds.some((pointId: string) => !body.points.some(item => item.pointId === pointId))) return res.status(400).json({ message: 'Record every generated temperature test point exactly once.' }); const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const observations = body.points.map(item => { const observationUnit = item.unit; const load = convertMass(item.load, observationUnit, unit); const indication = convertMass(item.indication, observationUnit, unit); const deltaL = convertMass(item.deltaL, observationUnit, unit); const zeroError = convertMass(item.zeroError, observationUnit, unit); const calculation = calculateInfluenceFactorsError({ load, indication, deltaL, e: Number(snapshot.e), zeroError }); const observation: any = { ...item, load, indication, deltaL, zeroError, ...calculation, ...evaluateInfluenceFactorsCompliance(snapshot, load, unit, calculation.Ec), recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; return observation; }); const result = observations.some((item: any) => item.compliance === 'FAIL' || item.heatingCoolingRate > 1) ? 'FAIL' : observations.every((item: any) => item.compliance === 'PASS' && item.heatingCoolingRate <= 1 && item.twoHourStabilityConfirmed) ? 'PASS' : 'INCOMPLETE'; test.temperature = { points: observations, zeroEffects: body.zeroEffects, result, notes: body.notes, recordedAt: new Date() }; phase.status = result === 'INCOMPLETE' ? 'IN_PROGRESS' : 'COMPLETED'; phase.result = result; if (phase.status === 'COMPLETED') { phase.completedAt = new Date(); activateNextInfluencePhase(test); } test.events.push({ action: 'INFLUENCE_FACTORS_TEMPERATURE_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); test.markModified('temperature'); test.markModified('phases'); await test.save(); res.json({ test: publicInfluenceFactors(test) }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/influence-factors/voltage', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test?.setup) return res.status(409).json({ message: 'Complete A.5 setup before voltage tests.' }); const phase: any = test.phases.find((item: any) => item.code === 'A.5.4'); if (!phase || phase.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'A.5.4 is not applicable.', code: 'NOT_APPLICABLE' }); const body = z.object({ observations: z.array(z.object({ label: z.string().min(1), targetVoltage: z.number().finite().positive(), actualVoltage: z.number().finite().positive(), load: z.number().finite().nonnegative(), indication: z.number().finite().optional(), deltaL: z.number().finite().nonnegative().optional(), zeroError: z.number().finite().optional(), functionBehavior: z.enum(['OPERATED', 'SWITCHED_OFF']), unit: z.enum(['mg', 'g', 'kg', 't']).optional() })).min(2), notes: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const observations = body.observations.map(item => { const observation: any = { ...item, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; if (item.functionBehavior === 'OPERATED' && item.indication !== undefined && item.deltaL !== undefined && item.zeroError !== undefined) { const observationUnit = isMassUnit(item.unit) ? item.unit : unit; const load = convertMass(item.load, observationUnit, unit); const indication = convertMass(item.indication, observationUnit, unit); const deltaL = convertMass(item.deltaL, observationUnit, unit); const calculation = calculateInfluenceFactorsError({ load, indication, deltaL, e: Number(snapshot.e), zeroError: convertMass(item.zeroError, observationUnit, unit) }); Object.assign(observation, calculation, evaluateInfluenceFactorsCompliance(snapshot, load, unit, calculation.Ec)); } return observation; }); const result = observations.every((item: any) => item.functionBehavior === 'SWITCHED_OFF' || item.compliance === 'PASS') ? 'PASS' : observations.some((item: any) => item.compliance === 'FAIL') ? 'FAIL' : 'INCOMPLETE'; test.voltage = { observations, result, notes: body.notes, recordedAt: new Date() }; phase.status = result === 'INCOMPLETE' ? 'IN_PROGRESS' : 'COMPLETED'; phase.result = result; if (phase.status === 'COMPLETED') { phase.completedAt = new Date(); activateNextInfluencePhase(test); } test.events.push({ action: 'INFLUENCE_FACTORS_VOLTAGE_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); test.markModified('voltage'); test.markModified('phases'); await test.save(); res.json({ test: publicInfluenceFactors(test) }); } catch (e) { next(e); }
+});
+
+r.patch('/:id/influence-factors/complete', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Influence Factors first.' }); const required = test.phases.filter((phase: any) => phase.applicability === 'APPLICABLE'); if (required.some((phase: any) => phase.status !== 'COMPLETED')) return res.status(409).json({ message: 'Complete every applicable A.5 branch before continuing to A.6.', code: 'INCOMPLETE' }); const result = required.some((phase: any) => phase.result === 'FAIL') ? 'FAIL' : required.every((phase: any) => phase.result === 'PASS') ? 'PASS' : 'INCOMPLETE'; if (result === 'INCOMPLETE') return res.status(409).json({ message: 'A.5 has incomplete derived results and cannot be finalized.', code: 'INCOMPLETE' }); test.result = result; test.status = 'COMPLETED'; test.completedAt = new Date(); test.events.push({ action: 'INFLUENCE_FACTORS_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicInfluenceFactors(test) }); } catch (e) { next(e); }
+});
+
 r.patch('/:id/laboratory', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req);
@@ -344,6 +1371,7 @@ r.post('/', async (req, res, next) => {
       zeroSettingMethod: instrumentRecord.zeroSettingMethod,
       zeroTracking: instrumentRecord.zeroTracking,
       zeroIndicatingDevice: instrumentRecord.zeroIndicatingDevice,
+      indicationDamping: instrumentRecord.indicationDamping,
       digitalIndication: instrumentRecord.digitalIndication,
       unit: instrumentRecord.unit,
       min: instrumentRecord.min,
@@ -357,6 +1385,12 @@ r.post('/', async (req, res, next) => {
       interfaces: instrumentRecord.interfaces,
       additionalInformation: instrumentRecord.additionalInformation,
       tareDevice: instrumentRecord.tareDevice,
+      tareDevicePresent: instrumentRecord.tareDevicePresent,
+      tareType: instrumentRecord.tareType,
+      maximumTareEffect: instrumentRecord.maximumTareEffect,
+      tareOperationMode: instrumentRecord.tareOperationMode,
+      tareWeighingDevicePresent: instrumentRecord.tareWeighingDevicePresent,
+      presetTareDevicePresent: instrumentRecord.presetTareDevicePresent,
       rangeType: instrumentRecord.rangeType,
       intervalType: instrumentRecord.intervalType,
       multipleIndicatingDevices: instrumentRecord.multipleIndicatingDevices,
@@ -365,17 +1399,64 @@ r.post('/', async (req, res, next) => {
       usesElectricPower: instrumentRecord.usesElectricPower,
       powerSupplyType: instrumentRecord.powerSupplyType,
       mobileInstrument: instrumentRecord.mobileInstrument,
-      portableRoadVehicleInstrument: instrumentRecord.portableRoadVehicleInstrument,
+       portableRoadVehicleInstrument: instrumentRecord.portableRoadVehicleInstrument,
+       rollingLoad: instrumentRecord.rollingLoad,
+       stableEquilibriumFunction: instrumentRecord.stableEquilibriumFunction,
+       printingCapability: instrumentRecord.printingCapability,
+       dataStorageCapability: instrumentRecord.dataStorageCapability,
+       zeroSettingCapability: instrumentRecord.zeroSettingCapability,
+       tareCapability: instrumentRecord.tareCapability,
+       differentiatedScaleDivisions: instrumentRecord.differentiatedScaleDivisions,
+       hasLevelIndicator: instrumentRecord.hasLevelIndicator,
+       hasAutomaticTiltSensor: instrumentRecord.hasAutomaticTiltSensor,
+       manufacturerTiltLimit: instrumentRecord.manufacturerTiltLimit,
+       tiltConfiguration: instrumentRecord.tiltConfiguration,
+       mobileOutdoorUse: instrumentRecord.mobileOutdoorUse,
+       powerSourceType: instrumentRecord.powerSourceType,
+       nominalVoltage: instrumentRecord.nominalVoltage,
+       minimumOperatingVoltage: instrumentRecord.minimumOperatingVoltage,
+       maximumVoltage: instrumentRecord.maximumVoltage,
+       specifiedVoltageRange: instrumentRecord.specifiedVoltageRange,
+       threePhaseSupply: instrumentRecord.threePhaseSupply,
+       rechargeableBattery: instrumentRecord.rechargeableBattery,
+       rechargeableBatteryCanChargeDuringOperation: instrumentRecord.rechargeableBatteryCanChargeDuringOperation,
+       specifiedMinimumTemperature: instrumentRecord.specifiedMinimumTemperature,
+       specifiedMaximumTemperature: instrumentRecord.specifiedMaximumTemperature,
+       manufacturerReferenceTemperature: instrumentRecord.manufacturerReferenceTemperature,
     };
     const report = await TestReport.create({ ...data, instrumentId: instrumentRecord._id, applicationNumber: data.applicationNumber || await nextApp(), testReportId: await nextId(), status: 'SUBMITTED', submittedBy: userId, instrument: instrumentSnapshot });
     res.status(201).json({ report });
   } catch (e) { next(e); }
 });
 
+r.patch('/:id/application', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req);
+    if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    if (!canEditReportMetadata(report)) return res.status(409).json({ message: 'Application details are locked after submission for review or finalization.' });
+    const body = z.object({
+      applicationNumber: z.string().trim().min(1).optional(),
+      referenceMode: z.enum(['generated', 'external']).optional(),
+      externalApplicationReference: z.string().trim().optional(),
+      applicant: z.object({ name: text, contactName: text, email: z.string().trim(), contactNumber: z.string().trim(), address: text }),
+    }).parse(req.body);
+    const validationMessage = applicationMetadataValidationMessage({ referenceMode: body.referenceMode, externalApplicationReference: body.externalApplicationReference, email: body.applicant.email, phone: body.applicant.contactNumber });
+    if (validationMessage) return res.status(400).json({ message: validationMessage });
+    const phone = normalizeIndianPhone(body.applicant.contactNumber)!;
+    report.applicationNumber = body.applicationNumber || report.applicationNumber;
+    report.externalApplicationReference = body.referenceMode === 'generated' ? '' : (body.externalApplicationReference || '');
+    report.applicant = { ...((report.applicant as any)?.toObject?.() || report.applicant || {}), name: body.applicant.name, contactName: body.applicant.contactName, email: body.applicant.email, contactNumber: phone, address: body.applicant.address } as any;
+    report.manufacturer = { ...((report.manufacturer as any)?.toObject?.() || report.manufacturer || {}), name: body.applicant.name, address: body.applicant.address } as any;
+    await report.save();
+    const value: any = report.toObject(); delete value._id; delete value.submittedBy;
+    res.json({ report: value });
+  } catch (e) { next(e); }
+});
+
 const getOwnedReport = (req: any) => {
   const identifier = String(req.params.id);
   const lookup = /^[a-f\d]{24}$/i.test(identifier) ? { _id: identifier } : { testReportId: identifier };
-  return TestReport.findOne({ ...lookup, $or: [{ submittedBy: req.user._id }, { testerId: req.user._id }] });
+  return TestReport.findOne({ ...lookup, ...testerReportAccessFilter(req.user._id) }).then((report: any) => report && hasTesterReportAccess(report, req.user._id) ? report : null);
 };
 const userName = (user: any) => `${user.firstName} ${user.lastName}`.trim();
 const statusFor = (section: string) => section === 'A.2' ? ['NOT_CHECKED', 'MATCHES_DOCUMENTATION', 'DISCREPANCY_FOUND', 'NOT_APPLICABLE'] : ['NOT_CHECKED', 'SATISFACTORY', 'ISSUE_FOUND', 'NOT_APPLICABLE'];
@@ -465,8 +1546,8 @@ r.post('/:id/verification/complete', async (req: any, res, next) => {
 });
 
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
-const publicPerformance = (test: any) => { const value: any = test.toObject ? test.toObject() : { ...test }; delete value._id; delete value.reportId; delete value.testerId; return value; };
-const performanceSnapshot = (report: any) => ({ accuracyClass: report.instrument.accuracyClass || '', unit: report.instrument.unit || 'g', max: report.instrument.max, min: report.instrument.min, e: report.instrument.e, d: report.instrument.d, n: report.instrument.n });
+const publicPerformance = (test: any) => { const value: any = test.toObject ? test.toObject() : { ...test }; delete value._id; delete value.reportId; delete value.testerId; const instrumentUnit: MassUnit = isMassUnit(value.instrumentSnapshot?.unit) ? value.instrumentSnapshot.unit : 'g'; if (!value.observationUnit) value.observationUnit = instrumentUnit; if (Array.isArray(value.loadPlan)) value.loadPlan = value.loadPlan.map((entry: any) => { const recommendedLoadCanonical = Number(entry.recommendedLoadCanonical ?? entry.recommendedLoad); const reason = entry.recommendationReason || entry.reason; return { ...entry, recommendedLoad: recommendedLoadCanonical, recommendedLoadCanonical, recommendedLoadDisplay: Number.isFinite(recommendedLoadCanonical) && isMassUnit(value.observationUnit) ? { value: convertMass(recommendedLoadCanonical, instrumentUnit, value.observationUnit), unit: value.observationUnit } : entry.recommendedLoadDisplay, reason, recommendationReason: reason, isMaximumPoint: entry.isMaximumPoint ?? entry.isMax, isMax: entry.isMax ?? entry.isMaximumPoint, isMin: entry.isMin ?? reason === 'MIN', isMpeTransition: entry.isMpeTransition ?? reason === 'MPE_TRANSITION', isSupplementary: entry.isSupplementary ?? reason === 'SUPPLEMENTARY' }; }); return value; };
+const performanceSnapshot = (report: any) => ({ accuracyClass: report.instrument.accuracyClass || '', unit: report.instrument.unit || 'g', max: report.instrument.max, min: report.instrument.min, e: report.instrument.e, d: report.instrument.d, n: report.instrument.n, multipleIndicatingDevices: report.instrument.multipleIndicatingDevices === true });
 const performanceEvent = (test: any, action: string, user: any, sequence?: number) => { test.events.push({ action, testerId: user._id, testerNameSnapshot: userName(user), timestamp: new Date(), sequence, metadata: {} }); };
 const performanceConfigurationError = (report: any) => {
   const instrument = report.instrument || {};
@@ -489,7 +1570,18 @@ const performanceConfigurationError = (report: any) => {
 };
 
 r.get('/:id/performance', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test = await WeighingPerformanceTest.findOne({ reportId: report._id }); const reportValue: any = report.toObject(); delete reportValue._id; delete reportValue.submittedBy; res.json({ report: reportValue, performance: test ? publicPerformance(test) : null }); }
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await WeighingPerformanceTest.findOne({ reportId: report._id });
+    // Existing completed reports are immutable. An active session with no
+    // observations can safely adopt the corrected canonical recommendation
+    // plan, while preserving all actual tester evidence once it exists.
+    if (test && test.status !== 'COMPLETED' && !test.loadPoints?.length) {
+      const snapshot: any = test.instrumentSnapshot || {}; const plan = generateRecommendedLoadPlan(Number(snapshot.min), Number(snapshot.max), Number(snapshot.e), String(snapshot.accuracyClass), { context: 'INITIAL_INTRINSIC_ERROR', unit: snapshot.unit });
+      if (plan.supported && JSON.stringify(test.loadPlan || []) !== JSON.stringify(plan.loads)) { test.loadPlan = plan.loads; test.events.push({ action: 'RECOMMENDED_LOAD_PLAN_REFRESHED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { reason: 'Canonical load-plan generator update' } }); await test.save(); }
+    }
+    const reportValue: any = report.toObject(); delete reportValue._id; delete reportValue.submittedBy; res.json({ report: reportValue, performance: test ? publicPerformance(test) : null });
+  }
   catch (e) { next(e); }
 });
 
@@ -506,11 +1598,22 @@ r.post('/:id/performance/start', async (req: any, res, next) => {
     if (configurationError) return res.status(409).json({ message: configurationError, code: 'CONFIGURATION_REQUIRED' });
     let test = await WeighingPerformanceTest.findOne({ reportId: report._id });
     if (!test) {
-      const snapshot = performanceSnapshot(report); const plan = generateRecommendedLoadPlan(snapshot.min, snapshot.max, snapshot.e, snapshot.accuracyClass);
-      test = new WeighingPerformanceTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', ruleVersion: RULE_VERSION, supported: plan.supported, supportReason: plan.supported ? undefined : plan.reason, instrumentSnapshot: snapshot, loadPlan: plan.supported ? plan.loads : [], startedAt: new Date(), events: [] });
+      const snapshot = performanceSnapshot(report); const plan = generateRecommendedLoadPlan(snapshot.min, snapshot.max, snapshot.e, snapshot.accuracyClass, { context: 'INITIAL_INTRINSIC_ERROR', unit: snapshot.unit });
+      test = new WeighingPerformanceTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', ruleVersion: RULE_VERSION, supported: plan.supported, supportReason: plan.supported ? undefined : plan.reason, instrumentSnapshot: snapshot, observationUnit: snapshot.unit, loadPlan: plan.supported ? plan.loads : [], startedAt: new Date(), events: [] });
       performanceEvent(test, 'WEIGHING_PERFORMANCE_STARTED', req.user); await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
     }
     res.status(201).json({ report, performance: publicPerformance(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/performance/observation-unit', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await WeighingPerformanceTest.findOne({ reportId: report._id });
+    if (!test || test.status === 'COMPLETED') return res.status(409).json({ message: 'This performance test is not editable.' });
+    const unit = String(req.body.unit || ''); if (!isMassUnit(unit)) return res.status(400).json({ message: 'Use a supported mass unit: mg, g, kg, or t.' });
+    test.observationUnit = unit; performanceEvent(test, 'OBSERVATION_UNIT_SELECTED', req.user); await test.save();
+    res.json({ performance: publicPerformance(test) });
   } catch (e) { next(e); }
 });
 
@@ -552,9 +1655,24 @@ const savePoint = async (test: any, body: any, sequence: number, user: any) => {
   if (deltaL < 0) throw Object.assign(new Error('Additional load ΔL cannot be negative.'), { status: 400 });
   if (test.zeroReference?.calculatedE0 === undefined || test.zeroReference?.calculatedE0 === null) throw Object.assign(new Error('Record the zero reference before entering load points.'), { status: 400 });
   if (test.loadPoints.some((entry: any) => entry.sequence !== sequence && entry.loadL === loadL)) throw Object.assign(new Error('Each load point must use a different actual load value.'), { status: 400 });
+  const rawDeviceValues = Array.isArray(body.indicatingDevices) ? body.indicatingDevices : [];
+  let indicatingDevices: any[] | undefined;
+  if (test.instrumentSnapshot?.multipleIndicatingDevices === true) {
+    if (rawDeviceValues.some((device: any) => !device || device.indication === '' || device.indication === null || device.indication === undefined || !Number.isFinite(Number(device.indication)))) throw Object.assign(new Error('Enter a numeric indication for every additional indicating device.'), { status: 400 });
+    indicatingDevices = [{ deviceId: 'DEVICE_1', label: 'Device 1', type: 'DISPLAY', unit, inputIndication: inputIndicationI, indication: indicationI }, ...rawDeviceValues.map((device: any, index: number) => ({ deviceId: String(device.deviceId || `DEVICE_${index + 2}`), label: String(device.label || `Device ${index + 2}`), type: ['DISPLAY', 'PRINTING', 'TARE_WEIGHING', 'OTHER'].includes(device.type) ? device.type : 'DISPLAY', unit, inputIndication: Number(device.indication), indication: convertMass(Number(device.indication), unit as MassUnit, instrumentUnit) }))];
+  }
   const calculated = calculatePerformancePoint(test, loadL, indicationI, deltaL);
-  const recommendedLoad = test.loadPlan.find((entry: any) => entry.sequence === sequence)?.recommendedLoad;
-  const point = { sequence, direction: body.direction === 'DECREASING' ? 'DECREASING' : 'INCREASING', recommendedLoad, unit, inputLoadL, inputIndicationI, inputDeltaL, loadL, indicationI, deltaL, ...calculated, updatedAt: new Date() };
+  test.observationUnit = unit;
+  const planEntry = test.loadPlan.find((entry: any) => entry.sequence === sequence);
+  const recommendedLoad = planEntry?.recommendedLoad;
+  // Generated plan rows are canonical. Preserve their direction even if a
+  // client sends a conflicting value; extra tester-added rows remain editable.
+  const direction = planEntry?.direction || (body.direction === 'DECREASING' ? 'DECREASING' : 'INCREASING');
+  const point: any = { sequence, direction, recommendedLoad, unit, inputLoadL, inputIndicationI, inputDeltaL, loadL, indicationI, deltaL, indicatingDevices, ...calculated, updatedAt: new Date() };
+  // Device 2 is a report-level instrument capability. Never persist an
+  // additional-indication array for an instrument that does not have one,
+  // even if an older client submits stale UI state.
+  if (test.instrumentSnapshot?.multipleIndicatingDevices !== true) delete point.indicatingDevices;
   const index = test.loadPoints.findIndex((entry: any) => entry.sequence === sequence); if (index >= 0) test.loadPoints[index] = point; else test.loadPoints.push(point); performanceEvent(test, 'LOAD_POINT_UPDATED', user, sequence); return point;
 };
 
@@ -580,6 +1698,7 @@ r.post('/:id/performance/complete', async (req: any, res, next) => {
       if (loadL < 0 || loadL > max || deltaL < 0) return res.status(400).json({ message: 'Every load point must use a non-negative load within Max and a non-negative ΔL.' });
       const recalculated = calculatePerformancePoint(test, loadL, indicationI, deltaL);
       Object.assign(point, { inputLoadL, inputIndicationI, inputDeltaL, unit: observationUnit, loadL, indicationI, deltaL }, recalculated, { updatedAt: new Date() });
+      if (test.instrumentSnapshot?.multipleIndicatingDevices !== true) delete (point as any).indicatingDevices;
     }
     const validPoints = test.loadPoints.filter((point: any) => point.result === 'PASS' || point.result === 'FAIL');
     const distinctLoads = new Set(validPoints.map((point: any) => point.loadL)).size;
@@ -591,13 +1710,178 @@ r.post('/:id/performance/complete', async (req: any, res, next) => {
   catch (e) { next(e); }
 });
 
+const publicEndurance = (test: any) => {
+  const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
+  if (!value) return null;
+  delete value._id; delete value.reportId; delete value.testerId;
+  return value;
+};
+
+const enduranceState = async (report: any) => {
+  const profile = instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>);
+  const route = generateApplicability(profile);
+  const routeApplicability: any = route.tests.find(test => test.code === 'A.6');
+  const ruleApplicability: any = enduranceApplicability({ accuracyClass: profile.accuracyClass, min: profile.minimumCapacity, max: profile.maximumCapacity, e: profile.e, d: profile.d, unit: profile.unit, rangeType: profile.rangeType });
+  const test: any = await EnduranceTest.findOne({ reportId: report._id });
+  const fingerprint = enduranceFingerprint(report.instrument || {});
+  const stale = !!test && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  if (stale && test.status !== 'REVALIDATION_REQUIRED' && report.status !== 'COMPLETED') {
+    test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.completedAt = undefined;
+    test.events.push({ action: 'ENDURANCE_REVALIDATION_REQUIRED', testerId: test.testerId, testerNameSnapshot: test.testerNameSnapshot, timestamp: new Date(), metadata: { previousFingerprint: test.sourceFingerprint, currentFingerprint: fingerprint } });
+    test.markModified('events'); await test.save();
+  }
+  return { route, applicability: { ...routeApplicability, ...ruleApplicability }, test, fingerprint, stale };
+};
+
+const endurancePrerequisitesComplete = async (report: any, route: any) => {
+  if (!(await influenceFactorsPrerequisitesComplete(report, route))) return false;
+  const a5 = route.tests.find((item: any) => item.code === 'A.5');
+  if (a5?.status !== 'APPLICABLE') return true;
+  const state = await influenceFactorsState(report);
+  return state.test?.status === 'COMPLETED' && !state.stale;
+};
+
+const enduranceSnapshot = (report: any) => ({ ...((report.instrument as any)?.toObject?.() || report.instrument || {}) });
+
+const endurancePhase = (code: string, name: string, status: string, result = 'INCOMPLETE') => ({ code, name, status, result, source: ENDURANCE_SOURCE });
+
+r.get('/:id/endurance', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await enduranceState(report);
+    if (!(await endurancePrerequisitesComplete(report, state.route))) return res.status(409).json({ code: 'DEPENDENCY_REQUIRED', message: 'Complete all required A.4 performance tests and the A.5 Influence Factors route before opening Endurance.' });
+    const snapshot = enduranceSnapshot(report);
+    res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, plan: Number.isFinite(Number(snapshot.max)) ? endurancePlan(snapshot) : null, test: publicEndurance(state.test) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/endurance/start', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await enduranceState(report);
+    if (!(await endurancePrerequisitesComplete(report, state.route))) return res.status(409).json({ code: 'DEPENDENCY_REQUIRED', message: 'Complete all required A.4 and A.5 testing before starting Endurance.' });
+    if (state.applicability.status !== 'APPLICABLE') return res.status(409).json({ code: state.applicability.status, message: state.applicability.reason });
+    if (state.stale) return res.status(409).json({ code: 'REVALIDATION_REQUIRED', message: 'The instrument snapshot changed. Revalidation is required before starting A.6.' });
+    let endurance: any = state.test;
+    if (!endurance) {
+      const snapshot = enduranceSnapshot(report);
+      const plan = endurancePlan(snapshot);
+      endurance = new EnduranceTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: ENDURANCE_TEST_VERSION, engineVersion: ENDURANCE_ENGINE_VERSION, ruleSetId: ENDURANCE_RULE_SET, source: ENDURANCE_SOURCE, applicability: state.applicability, status: 'IN_PROGRESS', result: 'INCOMPLETE', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, targetCycles: ENDURANCE_TARGET_CYCLES, completedCycles: 0, targetLoad: plan.targetLoad, cycleState: 'NOT_STARTED', checkpoints: [{ cycleNumber: 0, timestamp: new Date(), operator: userName(req.user), actualLoad: null, notes: 'Session created; software checkpoint only.' }], phases: [endurancePhase('A.6.1', 'Pre-endurance weighing', 'AVAILABLE'), endurancePhase('A.6.2', 'Endurance loading applications', 'LOCKED'), endurancePhase('A.6.3', 'Post-endurance weighing', 'LOCKED'), endurancePhase('A.6.4', 'Durability assessment', 'LOCKED')], events: [{ action: 'ENDURANCE_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { targetCycles: ENDURANCE_TARGET_CYCLES } }] });
+      await endurance.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
+    }
+    res.status(201).json({ report, applicability: state.applicability, plan: endurancePlan(enduranceSnapshot(report)), test: publicEndurance(endurance) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/endurance/pre-weighing', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance) return res.status(409).json({ message: 'Start Endurance first.' });
+    if (endurance.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ code: 'REVALIDATION_REQUIRED', message: 'Revalidation is required before editing A.6.' });
+    const performance: any = await WeighingPerformanceTest.findOne({ reportId: report._id });
+    if (!performance || performance.status !== 'COMPLETED' || !performance.loadPoints?.length) return res.status(409).json({ code: 'DEPENDENCY_REQUIRED', message: 'Complete A.4.4 Weighing Performance before recording the pre-endurance baseline.' });
+    const snapshot: any = endurance.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const target = Number(endurance.targetLoad?.value);
+    const point: any = [...performance.loadPoints].sort((a: any, b: any) => Math.abs(Number(a.loadL) - target) - Math.abs(Number(b.loadL) - target))[0];
+    if (!point || !Number.isFinite(Number(point.correctedErrorEc))) return res.status(409).json({ code: 'INCOMPLETE', message: 'A.4.4 has no complete calculated observation suitable for the pre-endurance baseline.' });
+    endurance.preWeighing = { sourceTestId: String(performance._id), sourceObservationId: `A.4.4:${point.sequence}`, sourceSequence: point.sequence, load: point.loadL, unit, trueIndicationP: point.trueIndicationP, rawErrorE: point.rawErrorE, correctedErrorEc: point.correctedErrorEc, mpeValue: point.mpeValue, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user), source: 'OIML R 76-1:2006 A.4.4.1 / A.4.4.3' };
+    const phase: any = endurance.phases.find((item: any) => item.code === 'A.6.1'); phase.status = 'COMPLETED'; phase.result = point.complianceResult || point.result || 'PASS'; phase.completedAt = new Date(); const next: any = endurance.phases.find((item: any) => item.code === 'A.6.2'); if (next) next.status = 'AVAILABLE';
+    endurance.events.push({ action: 'ENDURANCE_PRE_WEIGHING_LINKED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { sourceObservationId: `A.4.4:${point.sequence}` } }); endurance.markModified('preWeighing'); endurance.markModified('phases'); await endurance.save(); res.json({ test: publicEndurance(endurance) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/endurance/conditions', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance?.preWeighing) return res.status(409).json({ message: 'Complete the pre-endurance weighing first.' });
+    const body = z.object({ actualLoad: z.number().finite().positive(), unit: z.enum(['mg', 'g', 'kg', 't']), loadingMethod: z.enum(['MANUAL', 'TEST_EQUIPMENT', 'OTHER']), loadingFrequency: z.string().trim().min(1), loadingBehavior: z.string().trim().min(1), loadedEquilibriumConfirmed: z.literal(true), unloadedEquilibriumConfirmed: z.literal(true), appliedForceWithinNormalOperation: z.literal(true), normalConditionsConfirmed: z.literal(true), supportingEvidence: z.string().optional().default('') }).parse(req.body);
+    const snapshot: any = endurance.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const actualLoad = convertMass(body.actualLoad, body.unit, unit); if (actualLoad > Number(snapshot.max)) return res.status(400).json({ message: 'Actual endurance load cannot exceed the instrument Max.' });
+    endurance.actualLoad = { value: actualLoad, unit, inputValue: body.actualLoad, inputUnit: body.unit }; endurance.loadingConditions = { ...body, actualLoad, normalizedUnit: unit, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; endurance.markModified('actualLoad'); endurance.markModified('loadingConditions'); endurance.events.push({ action: 'ENDURANCE_CONDITIONS_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date() }); await endurance.save(); res.json({ test: publicEndurance(endurance) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/endurance/cycles/start', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance?.preWeighing || !endurance.loadingConditions) return res.status(409).json({ message: 'Record the pre-endurance weighing and required endurance conditions first.' }); if (endurance.cycleState === 'COMPLETED') return res.status(409).json({ message: 'The endurance cycle target is already complete.' }); const now = new Date(); endurance.cycleState = 'RUNNING'; endurance.startedAt ||= now; endurance.resumedAt = now; endurance.events.push({ action: 'ENDURANCE_CYCLES_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now }); await endurance.save(); res.json({ test: publicEndurance(endurance) }); } catch (e) { next(e); }
+});
+
+r.post('/:id/endurance/cycles/pause', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance || endurance.cycleState !== 'RUNNING') return res.status(409).json({ message: 'Endurance cycles are not running.' }); endurance.cycleState = 'PAUSED'; endurance.pausedAt = new Date(); endurance.events.push({ action: 'ENDURANCE_CYCLES_PAUSED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date() }); await endurance.save(); res.json({ test: publicEndurance(endurance) }); } catch (e) { next(e); }
+});
+
+r.post('/:id/endurance/cycles/resume', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance || endurance.cycleState !== 'PAUSED') return res.status(409).json({ message: 'Endurance cycles are not paused.' }); endurance.cycleState = 'RUNNING'; endurance.resumedAt = new Date(); endurance.events.push({ action: 'ENDURANCE_CYCLES_RESUMED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date() }); await endurance.save(); res.json({ test: publicEndurance(endurance) }); } catch (e) { next(e); }
+});
+
+r.post('/:id/endurance/cycles/record', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const body = z.object({ count: z.number().int().positive().max(ENDURANCE_TARGET_CYCLES), eventId: z.string().trim().min(1) }).parse(req.body);
+    const current: any = await EnduranceTest.findOne({ reportId: report._id });
+    if (!current || current.cycleState !== 'RUNNING') return res.status(409).json({ message: 'Start or resume the endurance cycle session first.' });
+    const upper = ENDURANCE_TARGET_CYCLES - body.count;
+    const updated: any = await EnduranceTest.findOneAndUpdate(
+      { _id: current._id, cycleState: 'RUNNING', completedCycles: { $lte: upper }, lastCycleEventId: { $ne: body.eventId } },
+      { $inc: { completedCycles: body.count }, $set: { lastCycleEventId: body.eventId } },
+      { new: true },
+    );
+    if (!updated) return res.status(409).json({ code: 'CYCLE_CONFLICT', message: 'Cycle event was already recorded or would exceed the required 100,000 applications.' });
+    const crossed = ENDURANCE_CHECKPOINTS.filter(checkpoint => checkpoint > current.completedCycles && checkpoint <= updated.completedCycles);
+    const now = new Date();
+    const push: any = { events: { action: 'ENDURANCE_CYCLES_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { count: body.count, cycleNumber: updated.completedCycles, eventId: body.eventId } } };
+    if (crossed.length) push.checkpoints = { $each: crossed.map(cycleNumber => ({ cycleNumber, timestamp: now, operator: userName(req.user), actualLoad: updated.actualLoad || null, notes: 'Software recovery checkpoint; not an additional OIML interval.' })) };
+    const audited: any = await EnduranceTest.findOneAndUpdate({ _id: updated._id }, { $push: push }, { new: true });
+    if (audited?.completedCycles === ENDURANCE_TARGET_CYCLES) {
+      const completed: any = await EnduranceTest.findOneAndUpdate({ _id: audited._id, completedCycles: ENDURANCE_TARGET_CYCLES }, { $set: { cycleState: 'COMPLETED', 'phases.1.status': 'COMPLETED', 'phases.1.result': 'INCOMPLETE', 'phases.1.completedAt': now, 'phases.2.status': 'AVAILABLE' } }, { new: true });
+      return res.json({ test: publicEndurance(completed || audited) });
+    }
+    res.json({ test: publicEndurance(audited || updated) });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/endurance/abnormal-event', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance) return res.status(409).json({ message: 'Start Endurance first.' });
+    const body = z.object({ eventType: z.enum(['TEST_EQUIPMENT_INTERRUPTION', 'POWER_INTERRUPTION', 'MECHANICAL_ISSUE', 'LOAD_HANDLING_INTERRUPTION', 'INSTRUMENT_FAULT', 'ENVIRONMENTAL_ISSUE', 'OTHER']), description: z.string().trim().min(1), actionTaken: z.string().trim().min(1), continued: z.boolean(), evidence: z.string().optional().default('') }).parse(req.body);
+    const event = { cycleNumber: endurance.completedCycles, timestamp: new Date(), ...body, testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    const updated: any = await EnduranceTest.findOneAndUpdate({ _id: endurance._id }, { $push: { abnormalEvents: event, events: { action: 'ENDURANCE_ABNORMAL_EVENT_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: event.timestamp, metadata: event } } }, { new: true });
+    res.json({ test: publicEndurance(updated) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/endurance/post-weighing', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance?.preWeighing || endurance.completedCycles !== ENDURANCE_TARGET_CYCLES) return res.status(409).json({ code: 'DEPENDENCY_REQUIRED', message: 'Exactly 100,000 endurance applications are required before the post-endurance weighing.' }); const body = z.object({ load: z.number().finite().nonnegative(), indication: z.number().finite(), deltaL: z.number().finite().nonnegative(), zeroError: z.number().finite().default(0), unit: z.enum(['mg', 'g', 'kg', 't']), notes: z.string().optional().default('') }).parse(req.body); const snapshot: any = endurance.instrumentSnapshot; const calc = calculateEnduranceWeighing({ load: body.load, loadUnit: body.unit, indication: body.indication, indicationUnit: body.unit, deltaL: body.deltaL, deltaLUnit: body.unit, zeroError: body.zeroError, zeroErrorUnit: body.unit, snapshot }); if (!calc.mpe.supported) return res.status(400).json({ message: calc.mpe.reason }); const load = calc.mpe.load; if (load !== Number(endurance.preWeighing.load)) return res.status(400).json({ message: 'Post-endurance load must match the linked pre-endurance baseline load.' }); endurance.postWeighing = { ...body, load, indication: convertMass(body.indication, body.unit, calc.unit), deltaL: convertMass(body.deltaL, body.unit, calc.unit), zeroError: calc.E0, ...calc, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user), source: 'OIML R 76-1:2006 A.4.4.1 / A.4.4.3' }; endurance.durabilityAssessment = assessDurability({ preError: Number(endurance.preWeighing.correctedErrorEc), postError: calc.Ec, load, snapshot }); const post: any = endurance.phases.find((item: any) => item.code === 'A.6.3'); if (post) { post.status = 'COMPLETED'; post.result = evaluateCompliance(calc.Ec, calc.mpe.mpeValue); post.completedAt = new Date(); } const assessment: any = endurance.phases.find((item: any) => item.code === 'A.6.4'); if (assessment) assessment.status = endurance.durabilityAssessment.supported ? 'AVAILABLE' : 'LOCKED'; endurance.markModified('postWeighing'); endurance.markModified('durabilityAssessment'); endurance.markModified('phases'); await endurance.save(); res.json({ test: publicEndurance(endurance) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/endurance/complete', async (req: any, res, next) => {
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance || endurance.completedCycles !== ENDURANCE_TARGET_CYCLES || !endurance.preWeighing || !endurance.postWeighing || !endurance.durabilityAssessment?.supported) return res.status(409).json({ code: 'INCOMPLETE', message: 'Complete the pre-endurance weighing, all 100,000 applications, post-endurance weighing, and durability assessment before completing A.6.' }); const result = endurance.durabilityAssessment.result; endurance.result = result; endurance.status = 'COMPLETED'; endurance.completedAt = new Date(); const phase: any = endurance.phases.find((item: any) => item.code === 'A.6.4'); if (phase) { phase.status = 'COMPLETED'; phase.result = result; phase.completedAt = new Date(); } endurance.events.push({ action: 'ENDURANCE_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); endurance.markModified('phases'); await endurance.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicEndurance(endurance) }); } catch (e) { next(e); }
+});
+
 const applicableTestCompletion = async (report: any) => {
   const performance = await WeighingPerformanceTest.findOne({ reportId: report._id });
   const zeroChecking = await ZeroCheckingTest.findOne({ reportId: report._id });
   const zeroSettingBeforeLoading = await ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id });
+  const tare = await TareTest.findOne({ reportId: report._id });
+  const eccentricity = await EccentricityTest.findOne({ reportId: report._id });
+  const multipleIndicating = await MultipleIndicatingDeviceTest.findOne({ reportId: report._id });
+  const discrimination = await DiscriminationTest.findOne({ reportId: report._id });
+  const sensitivity = await SensitivityTest.findOne({ reportId: report._id });
+  const repeatability = await RepeatabilityTest.findOne({ reportId: report._id });
+  const variationWithTime = await VariationWithTimeTest.findOne({ reportId: report._id });
+  const stabilityOfEquilibrium = await StabilityOfEquilibriumTest.findOne({ reportId: report._id });
+  const influenceFactors = await InfluenceFactorsTest.findOne({ reportId: report._id });
+  const endurance = await EnduranceTest.findOne({ reportId: report._id });
   const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
-  const pendingTests = route.tests.filter(test => test.status === 'APPLICABLE' && !((test.code === 'A.4.2' && zeroChecking?.status === 'COMPLETED') || (test.code === 'A.4.3' && zeroSettingBeforeLoading?.status === 'COMPLETED') || (test.code === 'A.4.4' && performance?.status === 'COMPLETED')));
-  return { performance, zeroChecking, zeroSettingBeforeLoading, route, pendingTests };
+  const discriminationStale = !!discrimination && discrimination.status === 'COMPLETED' && !!discrimination.sourceFingerprint && discrimination.sourceFingerprint !== discriminationFingerprint(report.instrument || {});
+  const sensitivityStale = !!sensitivity && sensitivity.status === 'COMPLETED' && !!sensitivity.sourceFingerprint && sensitivity.sourceFingerprint !== sensitivityFingerprint(report.instrument || {});
+  const repeatabilityStale = !!repeatability && repeatability.status === 'COMPLETED' && !!repeatability.sourceFingerprint && repeatability.sourceFingerprint !== repeatabilityFingerprint({ ...(report.instrument || {}), controlStage: report.controlStage || 'VERIFICATION' });
+  const variationStale = !!variationWithTime && variationWithTime.status === 'COMPLETED' && !!variationWithTime.sourceFingerprint && variationWithTime.sourceFingerprint !== variationWithTimeFingerprint(report.instrument || {});
+  const stabilityStale = !!stabilityOfEquilibrium && stabilityOfEquilibrium.status === 'COMPLETED' && !!stabilityOfEquilibrium.sourceFingerprint && stabilityOfEquilibrium.sourceFingerprint !== stabilityFingerprint(report.instrument || {});
+  const influenceFactorsStale = !!influenceFactors && influenceFactors.status === 'COMPLETED' && !!influenceFactors.sourceFingerprint && influenceFactors.sourceFingerprint !== influenceFactorsFingerprint(report.instrument || {});
+  const enduranceStale = !!endurance && endurance.status === 'COMPLETED' && !!endurance.sourceFingerprint && endurance.sourceFingerprint !== enduranceFingerprint(report.instrument || {});
+  const pendingTests = route.tests.filter(test => test.status === 'APPLICABLE' && !((test.code === 'A.4.2' && zeroChecking?.status === 'COMPLETED') || (test.code === 'A.4.3' && zeroSettingBeforeLoading?.status === 'COMPLETED') || (test.code === 'A.4.4' && performance?.status === 'COMPLETED') || (test.code === 'A.4.5' && ['PASS', 'FAIL'].includes(multipleIndicating?.status || '')) || (test.code === 'A.4.6' && tare?.status === 'COMPLETED') || (test.code === 'A.4.7' && eccentricity?.status === 'COMPLETED') || (test.code === 'A.4.8' && discrimination?.status === 'COMPLETED' && !discriminationStale) || (test.code === 'A.4.9' && sensitivity?.status === 'COMPLETED' && !sensitivityStale) || (test.code === 'A.4.10' && repeatability?.status === 'COMPLETED' && !repeatabilityStale) || (test.code === 'A.4.11' && variationWithTime?.status === 'COMPLETED' && !variationStale) || (test.code === 'A.4.12' && stabilityOfEquilibrium?.status === 'COMPLETED' && !stabilityStale) || (test.code === 'A.5' && influenceFactors?.status === 'COMPLETED' && !influenceFactorsStale) || (test.code === 'A.6' && endurance?.status === 'COMPLETED' && !enduranceStale)));
+  const attentionTests = route.tests.filter(test => ['REQUIRES_CONFIGURATION', 'REQUIRES_CONTEXT', 'UNSUPPORTED'].includes(test.status) || (test.code === 'A.4.8' && discriminationStale) || (test.code === 'A.4.9' && sensitivityStale) || (test.code === 'A.4.10' && repeatabilityStale) || (test.code === 'A.4.11' && variationStale) || (test.code === 'A.4.12' && stabilityStale) || (test.code === 'A.5' && influenceFactorsStale) || (test.code === 'A.6' && enduranceStale));
+  return { performance, zeroChecking, zeroSettingBeforeLoading, tare, eccentricity, multipleIndicating, discrimination, sensitivity, repeatability, variationWithTime, stabilityOfEquilibrium, influenceFactors, endurance, influenceFactorsStale, enduranceStale, route, pendingTests, attentionTests };
 };
 
 r.get('/:id/test-conditions', async (req: any, res, next) => {
@@ -605,7 +1889,7 @@ r.get('/:id/test-conditions', async (req: any, res, next) => {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const state = await applicableTestCompletion(report);
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;
-    res.json({ report: value, available: state.pendingTests.length === 0, pendingTests: state.pendingTests, performance: state.performance ? publicPerformance(state.performance) : null, zeroSettingBeforeLoading: state.zeroSettingBeforeLoading ? publicZeroSetting(state.zeroSettingBeforeLoading) : null });
+    res.json({ report: value, available: state.pendingTests.length === 0 && state.attentionTests.length === 0, pendingTests: state.pendingTests, attentionTests: state.attentionTests, performance: state.performance ? publicPerformance(state.performance) : null, zeroSettingBeforeLoading: state.zeroSettingBeforeLoading ? publicZeroSetting(state.zeroSettingBeforeLoading) : null, sensitivity: state.sensitivity ? publicSensitivity(state.sensitivity) : null, repeatability: state.repeatability ? publicRepeatability(state.repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null });
   } catch (e) { next(e); }
 });
 
@@ -629,9 +1913,10 @@ r.patch('/:id/test-conditions', async (req: any, res, next) => {
   } catch (e) { next(e); }
 });
 
-const reviewReadiness = (report: any, performance: any, pendingTests: any[] = []) => {
+const reviewReadiness = (report: any, performance: any, pendingTests: any[] = [], attentionTests: any[] = []) => {
   if (!performance || performance.status !== 'COMPLETED') return 'Complete A.4.4 Weighing Performance before opening the final report preview.';
   if (pendingTests.length) return `Complete all applicable tests before final review. ${pendingTests.length} applicable test(s) remain.`;
+  if (attentionTests.length) return `${attentionTests[0].code} requires attention before final review: ${attentionTests[0].reason || 'complete its configuration or execution.'}`;
   const environment = report.environment || {};
   if (!report.laboratory?.testEndDate || !finite(environment.temperatureEnd) || !finite(environment.relativeHumidityEnd) || !finite(environment.barometricPressureEnd)) return 'Complete Test Conditions with the session end time, temperature, humidity, and barometric pressure before final review.';
   return null;
@@ -642,9 +1927,20 @@ r.get('/:id/review', async (req: any, res, next) => {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const performance = await WeighingPerformanceTest.findOne({ reportId: report._id });
     const verification = await VerificationSession.findOne({ reportId: report._id });
+    const zeroChecking = await ZeroCheckingTest.findOne({ reportId: report._id });
+    const zeroSettingBeforeLoading = await ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id });
+    const tare = await TareTest.findOne({ reportId: report._id });
+    const discrimination = await DiscriminationTest.findOne({ reportId: report._id });
+    const sensitivity = await SensitivityTest.findOne({ reportId: report._id });
+    const repeatability = await RepeatabilityTest.findOne({ reportId: report._id });
+    const endurance = await EnduranceTest.findOne({ reportId: report._id });
     const state = await applicableTestCompletion(report);
+    const derivedMultipleIndicating = await multipleIndicatingState(report, req.user);
+    if (derivedMultipleIndicating.test) state.multipleIndicating = derivedMultipleIndicating.test;
+    if (state.multipleIndicating && ['PASS', 'FAIL'].includes(state.multipleIndicating.status)) state.pendingTests = state.pendingTests.filter((test: any) => test.code !== 'A.4.5');
+    const attentionTests = state.attentionTests;
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;
-    res.json({ report: value, verification, performance: performance ? publicPerformance(performance) : null, applicability: state.route, pendingTests: state.pendingTests, readinessError: reviewReadiness(report, performance, state.pendingTests) });
+  res.json({ report: value, verification, zeroChecking: zeroChecking ? publicZeroChecking(zeroChecking) : null, zeroSettingBeforeLoading: zeroSettingBeforeLoading ? publicZeroSetting(zeroSettingBeforeLoading) : null, tare: tare ? publicTare(tare) : null, eccentricity: state.eccentricity ? publicEccentricity(state.eccentricity) : null, multipleIndicating: state.multipleIndicating ? publicMultipleIndicating(state.multipleIndicating) : null, discrimination: discrimination ? publicDiscrimination(discrimination) : null, sensitivity: sensitivity ? publicSensitivity(sensitivity) : null, repeatability: repeatability ? publicRepeatability(repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null, endurance: endurance ? publicEndurance(endurance) : null, performance: performance ? publicPerformance(performance) : null, applicability: state.route, pendingTests: state.pendingTests, attentionTests, readinessError: reviewReadiness(report, performance, state.pendingTests, attentionTests) });
   } catch (e) { next(e); }
 });
 
@@ -653,7 +1949,8 @@ r.post('/:id/review/submit', async (req: any, res, next) => {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const performance = await WeighingPerformanceTest.findOne({ reportId: report._id });
     const state = await applicableTestCompletion(report);
-    const readinessError = reviewReadiness(report, performance, state.pendingTests); if (readinessError) return res.status(409).json({ message: readinessError });
+    const attentionTests = state.attentionTests;
+    const readinessError = reviewReadiness(report, performance, state.pendingTests, attentionTests); if (readinessError) return res.status(409).json({ message: readinessError });
     if (report.stage === 'FINAL_REPORT' && report.status === 'COMPLETED') return res.json({ report });
     report.stage = 'FINAL_REPORT'; report.status = 'COMPLETED'; await report.save();
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;

@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Lock, Play, Save } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import './zero-setting.css';
+import TestProcedureInfo from '../guidance/TestProcedureInfo';
 
 export default function ZeroSettingBeforeLoadingWorkspace() {
   const { reportId = '' } = useParams();
@@ -54,6 +55,7 @@ export default function ZeroSettingBeforeLoadingWorkspace() {
       </>}
       {error && <div className="zero-setting-error-message">{error}</div>}
       <section className="zero-setting-panel zero-setting-trace"><span className="technical-label">TRACEABILITY</span><p>OIML R 76-1:2006 Annex A A.4.3(b), using the completed A.4.2.3 result and its existing A.4.4.3 changeover/MPE calculation evidence.</p></section>
+      {applicability?.status !== 'NOT_APPLICABLE' && <TestProcedureInfo testId="A.4.3" configuration={{ ...(state.test?.instrumentSnapshot || state.report?.instrument || {}), method: applicability?.method, applicabilityStatus: applicability?.status }} />}
     </section>
   </main>;
 }
@@ -68,16 +70,24 @@ function SourceEvidence({ source }: { source: any }) {
   const calculationUnit = calculations.mpeUnit || observationUnit;
   const value = (item: unknown) => Number.isFinite(Number(item)) ? Number(item).toFixed(4) : '—';
   const rows = [
-    ['Zero indication I0', input('ZeroIndicationI0', observations.zeroIndicationI0), observationUnit],
-    ['Additional load ΔL0', input('DeltaL0', observations.deltaL0), observationUnit],
+    ['Zero indication I₀', input('ZeroIndicationI0', observations.zeroIndicationI0), observationUnit],
+    ['Additional load ΔL₀', input('DeltaL0', observations.deltaL0), observationUnit],
     ['Test load L', input('LoadL', observations.loadL), observationUnit],
     ['Indication I', input('IndicationI', observations.indicationI), observationUnit],
     ['Additional load ΔL', input('DeltaL', observations.deltaL), observationUnit],
     ['P', calculations.trueIndicationP, calculationUnit],
     ['E', calculations.rawErrorE, calculationUnit],
-    ['E0', calculations.calculatedE0, calculationUnit],
-    ['Ec', calculations.correctedErrorEc, calculationUnit],
+    ['E₀', calculations.calculatedE0, calculationUnit],
+    ['E_c', calculations.correctedErrorEc, calculationUnit],
     ['MPE', calculations.mpeValue === undefined ? undefined : `±${value(calculations.mpeValue)}`, calculationUnit],
   ];
-  return <section className="zero-setting-panel zero-setting-evidence"><div className="zero-setting-section-heading"><div><span className="technical-label">SOURCE EVIDENCE · A.4.2.3</span><h2>Read-only zero-setting accuracy result</h2></div><strong className={String(source.result || calculations.result).toLowerCase()}>{source.result || calculations.result}</strong></div><p className="zero-setting-evidence-copy">These are the persisted observations and calculations from A.4.2.3. A.4.3 does not duplicate or recalculate them.</p><div className="zero-setting-values">{rows.map(([label, item, unit]) => <div key={label}><span>{label}</span><strong>{typeof item === 'string' && item.startsWith('±') ? item : value(item)} {unit}</strong></div>)}<div><span>A.4.2.3 result</span><strong className={String(source.result || calculations.result).toLowerCase()}>{source.result || calculations.result}</strong></div></div><small>{calculations.ruleReference || 'OIML R 76-1:2006 §3.5.1 Table 6'} · zero deviation carried forward: {value(calculations.calculatedE0)} {calculationUnit}</small></section>;
+  return <section className="zero-setting-panel zero-setting-evidence"><div className="zero-setting-section-heading"><div><span className="technical-label">SOURCE EVIDENCE · A.4.2.3</span><h2>Read-only zero-setting accuracy result</h2></div><strong className={String(source.result || calculations.result).toLowerCase()}>{source.result || calculations.result}</strong></div><p className="zero-setting-evidence-copy">These are the persisted observations and calculations from A.4.2.3. A.4.3 does not duplicate or recalculate them.</p><div className="zero-setting-values">{rows.map(([label, item, unit]) => <div key={String(label)}><span>{displayMathLabel(String(label))}</span><strong>{typeof item === 'string' && item.startsWith('±') ? item : value(item)} {unit}</strong></div>)}<div><span>A.4.2.3 result</span><strong className={String(source.result || calculations.result).toLowerCase()}>{source.result || calculations.result}</strong></div></div><small>{calculations.ruleReference || 'OIML R 76-1:2006 §3.5.1 Table 6'} · zero deviation carried forward: {value(calculations.calculatedE0)} {calculationUnit}</small></section>;
+}
+
+function displayMathLabel(label: string) {
+  if (label === 'I₀') return <span className="math-variable" aria-label="I sub zero">I<sub>0</sub></span>;
+  if (label === 'ΔL₀') return <span className="math-variable" aria-label="delta L sub zero">ΔL<sub>0</sub></span>;
+  if (label === 'E₀') return <span className="math-variable" aria-label="E sub zero">E<sub>0</sub></span>;
+  if (label === 'E_c') return <span className="math-variable" aria-label="E sub c">E<sub>c</sub></span>;
+  return label;
 }

@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import { Instrument } from '../models/Instrument.js';
 import { TestReport } from '../models/TestReport.js';
 import { WeighingPerformanceTest } from '../models/WeighingPerformanceTest.js';
+import { validateScaleIntervals } from '../services/scaleInterval.js';
 
 const r = Router();
 const text = z.string().trim().min(1);
@@ -18,6 +19,7 @@ const instrumentInput = z.object({
   zeroTracking: z.boolean(),
   zeroIndicatingDevice: z.boolean(),
   digitalIndication: z.boolean(),
+  indicationDamping: z.enum(['NOT_SPECIFIED', 'DAMPED', 'NON_DAMPED']).optional(),
   unit: z.enum(['mg', 'g', 'kg', 't']).default('g'),
   min: z.number().finite().min(0),
   max: z.number().finite().positive(),
@@ -30,16 +32,29 @@ const instrumentInput = z.object({
   rangeType: z.enum(['single-range', 'multiple-range']),
   intervalType: z.enum(['single-interval', 'multi-interval']),
   tareDevice: yesNo,
+  tareDevicePresent: z.boolean().optional(),
+  tareType: z.enum(['SUBTRACTIVE', 'ADDITIVE']).optional(),
+  maximumTareEffect: z.object({ value: z.number().finite().positive(), unit: z.enum(['mg', 'g', 'kg', 't']) }).optional(),
+  tareOperationMode: z.enum(['NON_AUTOMATIC', 'SEMI_AUTOMATIC', 'AUTOMATIC']).optional(),
+  tareWeighingDevicePresent: z.boolean().optional(),
+  presetTareDevicePresent: z.boolean().optional(),
   multipleIndicatingDevices: z.boolean(),
   loadReceptorType: z.enum(['normal platform', 'other / special configuration']),
   numberOfSupportPoints: z.number().int().min(0).optional(),
   usesElectricPower: z.boolean(),
   powerSupplyType: z.enum(['AC mains', 'DC / battery', 'Other', 'Not specified']),
   mobileInstrument: z.boolean(),
-  portableRoadVehicleInstrument: z.boolean(),
+  portableRoadVehicleInstrument: z.boolean(), rollingLoad: z.boolean(),
+  stableEquilibriumFunction: z.boolean(), printingCapability: z.boolean(), dataStorageCapability: z.boolean(), zeroSettingCapability: z.boolean(), tareCapability: z.boolean(), differentiatedScaleDivisions: z.boolean(),
+  hasLevelIndicator: z.boolean().optional(), hasAutomaticTiltSensor: z.boolean().optional(), manufacturerTiltLimit: z.number().finite().nonnegative().optional(), tiltConfiguration: z.boolean().optional(), mobileOutdoorUse: z.boolean().optional(),
+  powerSourceType: z.enum(['AC_MAINS', 'EXTERNAL_AC_DC', 'NON_RECHARGEABLE_BATTERY', 'ROAD_VEHICLE_BATTERY_12V', 'ROAD_VEHICLE_BATTERY_24V']).optional(), nominalVoltage: z.number().finite().positive().optional(), minimumOperatingVoltage: z.number().finite().positive().optional(), maximumVoltage: z.number().finite().positive().optional(),
+  specifiedVoltageRange: z.object({ min: z.number().finite().positive().optional(), max: z.number().finite().positive().optional() }).optional(), threePhaseSupply: z.boolean().optional(), rechargeableBattery: z.boolean().optional(), rechargeableBatteryCanChargeDuringOperation: z.boolean().optional(),
+  specifiedMinimumTemperature: z.number().finite().optional(), specifiedMaximumTemperature: z.number().finite().optional(), manufacturerReferenceTemperature: z.number().finite().optional(),
 }).superRefine((instrument, ctx) => {
   if (instrument.max <= instrument.min) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['max'], message: 'Max must be greater than Min.' });
   if (!Number.isInteger(instrument.max / instrument.e)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['e'], message: 'Max divided by e must be a whole number.' });
+  const scaleInterval = validateScaleIntervals(instrument);
+  if (!scaleInterval.valid) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['d'], message: scaleInterval.message });
 });
 
 r.use(requireAuth, requireRole('TESTER'));
@@ -56,12 +71,16 @@ function reportQuery(userId: unknown, instrument: any) {
 function reportInstrumentSnapshot(instrument: any) {
   return {
     typeDesignation: instrument.typeDesignation, accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType,
-    zeroSettingMethod: instrument.zeroSettingMethod, zeroTracking: instrument.zeroTracking, zeroIndicatingDevice: instrument.zeroIndicatingDevice, digitalIndication: instrument.digitalIndication,
+    zeroSettingMethod: instrument.zeroSettingMethod, zeroTracking: instrument.zeroTracking, zeroIndicatingDevice: instrument.zeroIndicatingDevice, digitalIndication: instrument.digitalIndication, indicationDamping: instrument.indicationDamping,
     unit: instrument.unit || 'g', min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, n: instrument.n,
     serialNumber: instrument.serialNumber, softwareVersion: instrument.softwareVersion, loadCellInformation: instrument.loadCellInformation,
-    tareDevice: instrument.tareDevice, rangeType: instrument.rangeType, intervalType: instrument.intervalType, multipleIndicatingDevices: instrument.multipleIndicatingDevices,
+    tareDevice: instrument.tareDevice, tareDevicePresent: instrument.tareDevicePresent, tareType: instrument.tareType, maximumTareEffect: instrument.maximumTareEffect, tareOperationMode: instrument.tareOperationMode, tareWeighingDevicePresent: instrument.tareWeighingDevicePresent, presetTareDevicePresent: instrument.presetTareDevicePresent, rangeType: instrument.rangeType, intervalType: instrument.intervalType, multipleIndicatingDevices: instrument.multipleIndicatingDevices,
     loadReceptorType: instrument.loadReceptorType, numberOfSupportPoints: instrument.numberOfSupportPoints, usesElectricPower: instrument.usesElectricPower,
-    powerSupplyType: instrument.powerSupplyType, mobileInstrument: instrument.mobileInstrument, portableRoadVehicleInstrument: instrument.portableRoadVehicleInstrument,
+    powerSupplyType: instrument.powerSupplyType, mobileInstrument: instrument.mobileInstrument, portableRoadVehicleInstrument: instrument.portableRoadVehicleInstrument, rollingLoad: instrument.rollingLoad,
+    stableEquilibriumFunction: instrument.stableEquilibriumFunction, printingCapability: instrument.printingCapability, dataStorageCapability: instrument.dataStorageCapability, zeroSettingCapability: instrument.zeroSettingCapability, tareCapability: instrument.tareCapability, differentiatedScaleDivisions: instrument.differentiatedScaleDivisions,
+    hasLevelIndicator: instrument.hasLevelIndicator, hasAutomaticTiltSensor: instrument.hasAutomaticTiltSensor, manufacturerTiltLimit: instrument.manufacturerTiltLimit, tiltConfiguration: instrument.tiltConfiguration, mobileOutdoorUse: instrument.mobileOutdoorUse,
+    powerSourceType: instrument.powerSourceType, nominalVoltage: instrument.nominalVoltage, minimumOperatingVoltage: instrument.minimumOperatingVoltage, maximumVoltage: instrument.maximumVoltage, specifiedVoltageRange: instrument.specifiedVoltageRange, threePhaseSupply: instrument.threePhaseSupply, rechargeableBattery: instrument.rechargeableBattery, rechargeableBatteryCanChargeDuringOperation: instrument.rechargeableBatteryCanChargeDuringOperation,
+    specifiedMinimumTemperature: instrument.specifiedMinimumTemperature, specifiedMaximumTemperature: instrument.specifiedMaximumTemperature, manufacturerReferenceTemperature: instrument.manufacturerReferenceTemperature,
     interfaces: instrument.interfaces, additionalInformation: instrument.additionalInformation,
   };
 }

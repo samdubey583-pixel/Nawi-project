@@ -1,0 +1,46 @@
+import mongoose, { Schema } from 'mongoose';
+
+const eventSchema = new Schema({
+  action: String,
+  testerId: Schema.Types.ObjectId,
+  testerNameSnapshot: String,
+  timestamp: Date,
+  metadata: Schema.Types.Mixed,
+}, { _id: false });
+
+const enduranceSchema = new Schema({
+  reportId: { type: Schema.Types.ObjectId, ref: 'TestReport', required: true, unique: true, index: true },
+  testerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  testerNameSnapshot: { type: String, required: true },
+  testerRole: { type: String, required: true },
+  testVersion: { type: String, required: true },
+  engineVersion: { type: String, required: true },
+  ruleSetId: { type: String, required: true },
+  source: { type: String, required: true },
+  applicability: Schema.Types.Mixed,
+  status: { type: String, enum: ['IN_PROGRESS', 'COMPLETED', 'REVALIDATION_REQUIRED'], default: 'IN_PROGRESS' },
+  result: { type: String, enum: ['PASS', 'FAIL', 'INCOMPLETE', 'NOT_APPLICABLE', 'NOT_DETERMINED', 'REVALIDATION_REQUIRED'], default: 'INCOMPLETE' },
+  instrumentSnapshot: Schema.Types.Mixed,
+  sourceFingerprint: String,
+  targetCycles: { type: Number, required: true, default: 100000 },
+  completedCycles: { type: Number, required: true, default: 0, min: 0, max: 100000 },
+  targetLoad: Schema.Types.Mixed,
+  actualLoad: Schema.Types.Mixed,
+  cycleState: { type: String, enum: ['NOT_STARTED', 'RUNNING', 'PAUSED', 'COMPLETED'], default: 'NOT_STARTED' },
+  startedAt: Date,
+  pausedAt: Date,
+  resumedAt: Date,
+  completedAt: Date,
+  lastCycleEventId: String,
+  loadingConditions: Schema.Types.Mixed,
+  checkpoints: { type: [Schema.Types.Mixed], default: [] },
+  abnormalEvents: { type: [Schema.Types.Mixed], default: [] },
+  preWeighing: Schema.Types.Mixed,
+  postWeighing: Schema.Types.Mixed,
+  durabilityAssessment: Schema.Types.Mixed,
+  phases: { type: [Schema.Types.Mixed], default: [] },
+  events: { type: [eventSchema], default: [] },
+  revisionHistory: { type: [Schema.Types.Mixed], default: [] },
+}, { timestamps: true, collection: 'enduranceTests' });
+
+export const EnduranceTest = mongoose.model('EnduranceTest', enduranceSchema);

@@ -97,6 +97,11 @@ h1, h2, h3, h4 { font-family: 'Manrope', sans-serif; color: var(--ink); }
 @keyframes auth-arc-two { 0% { transform: rotate(4deg) translate3d(1%, 2%, 0); } 100% { transform: rotate(-5deg) translate3d(-3%, -1%, 0); } }
 @keyframes auth-glint { 0%, 100% { opacity: .12; transform: translateY(0) scale(.9); } 50% { opacity: .58; transform: translateY(-5px) scale(1.15); } }
 @media (max-width: 900px) { .auth-card { grid-template-columns: 1fr; }.hero-panel { min-height: 420px; }.form-panel { min-height: 520px; }.app-shell aside { width: 78px; padding: 22px 10px; }.side-brand { padding: 0 0 28px; text-align: center; }.side-brand .side-logo-link { padding: 8px; }.side-brand .logo span, .side-brand small, .side-nav a { font-size: 0; }.side-nav a { justify-content: center; }.side-nav a svg { width: 20px; height: 20px; }.side-user { justify-content: center; }.side-user > div:not(.avatar), .side-user button { display: none; }.dashboard { padding: 35px 22px 55px; }.report-meta, .performance-meta { grid-template-columns: repeat(2, 1fr); }.report-meta > div:nth-child(2n), .performance-meta > div:nth-child(2n) { border-right: 0; }.report-meta > div:nth-child(n+3), .performance-meta > div:nth-child(n+3) { border-top: 1px solid var(--line); }.performance-content, .workspace-content, .reports-content { width: min(100% - 32px, 1180px); }.performance-summary { flex-wrap: wrap; }.performance-summary .performance-primary { margin-left: 0; }.instructions ol { grid-template-columns: 1fr; } }
+
+/* Keep the navigation rail present for the full viewport while the main
+   workspace grows and scrolls independently. */
+.app-shell { align-items: flex-start; }
+.app-shell aside { min-height: 100vh; height: 100dvh; align-self: flex-start; position: sticky; top: 0; z-index: 3; box-sizing: border-box; }
 @media (max-width: 650px) { .page { padding: 20px 0 0; }.site-header { padding: 0 20px; margin-bottom: 20px; }.header-product { display: none; }.auth-card { border-right: 0; border-left: 0; border-radius: 0; }.hero-panel { min-height: 365px; padding: 31px 23px; }.hero-panel h2 { font-size: 43px; }.feature-row { gap: 10px; margin-top: 28px; font-size: 12px; }.form-panel { padding: 38px 23px 48px; }.form-panel h1 { font-size: 34px; }.twocol, .report-fields, .reference-choice { grid-template-columns: 1fr; gap: 0; }.report-page { padding: 28px 16px 50px; }.report-header h1 { font-size: 33px; }.report-steps { gap: 4px; }.report-steps button { padding: 8px 5px; font-size: 11px; }.report-steps span { width: 23px; height: 23px; }.report-card { padding: 22px 17px; }.workspace-top, .performance-top, .reports-top { flex-wrap: wrap; padding: 15px 16px; }.workspace-brand, .reports-brand { order: -1; width: 100%; }.workspace-content, .performance-content, .reports-content { width: calc(100% - 28px); padding-top: 28px; }.workspace-heading, .performance-heading, .reports-heading { display: block; }.workspace-heading h1, .performance-heading h1, .reports-heading h1 { font-size: 31px; }.report-meta, .performance-meta { grid-template-columns: 1fr; }.report-meta > div, .performance-meta > div { border-right: 0; border-top: 1px solid var(--line); }.report-meta > div:first-child, .performance-meta > div:first-child { border-top: 0; }.verification-intro, .performance-start { align-items: flex-start; flex-wrap: wrap; padding: 18px; }.verification-intro .report-primary, .performance-start .performance-primary { margin-left: 61px; }.mvp-section { grid-template-columns: 1fr; gap: 8px; padding: 17px; }.mvp-heading, .panel-title { display: block; }.compact-fields { display: grid; grid-template-columns: 1fr; }.compact-fields input { width: 100%; }.completion-bar { display: block; }.completion-bar .report-primary { margin-top: 16px; }.performance-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }.performance-summary .performance-primary { width: 100%; }.welcome-row { display: block; }.welcome-actions { flex-wrap: wrap; margin-top: 22px; }.stats { grid-template-columns: repeat(2, 1fr); }.dashboard-grid { grid-template-columns: 1fr; }.app-top { padding: 0 17px; }.top-user > span:first-child, .top-user .logout { display: none; }.steps { overflow-x: auto; justify-content: flex-start; padding-bottom: 5px; }.step { flex: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 /* The auth animation is an explicit product affordance: keep it active even when
@@ -192,19 +197,73 @@ h1, h2, h3, h4 { font-family: 'Manrope', sans-serif; color: var(--ink); }
 @media (max-width: 650px) { .final-report-grid { grid-template-columns: 1fr; }.final-report-grid .span-two { grid-column: auto; }.final-report-section { padding: 17px; }.final-report-section-heading { display: block; }.final-report-section-heading span { display: block; margin-top: 5px; } }
 @media (max-width: 650px) { .report-identity { grid-template-columns: 1fr 1fr; }.report-identity > div:nth-child(2n) { border-right: 0; }.report-identity > div:nth-child(n+3) { border-top: 1px solid rgba(231,221,201,.2); }.route-result-row { align-items: flex-start; flex-direction: column; gap: 10px; }.lab-start-summary { flex-direction: column; gap: 14px; }.lab-locked { padding: 19px; }.overall-result { padding: 22px; }.overall-result h2 { font-size: 26px; } }
 
-/* Auth ambient motion restored from the original premium auth treatment. The
-   spans are moved by AuthLayout's requestAnimationFrame loop so the movement
-   remains smooth and independent for each organic form. */
-.page .auth-ambient { position: absolute; z-index: 0; inset: -7%; overflow: hidden; pointer-events: none; }
-.page .auth-shape { position: absolute; display: block; border-radius: 46% 54% 62% 38% / 55% 42% 58% 45%; filter: blur(7px); opacity: .7; mix-blend-mode: multiply; will-change: transform; }
-.page .auth-shape-one { width: 370px; height: 260px; top: 4%; left: -55px; background: #e2d2bc; }
-.page .auth-shape-two { width: 300px; height: 300px; right: -28px; top: 11%; background: #cbb7a1; border-radius: 54% 46% 42% 58% / 44% 56% 49% 51%; }
-.page .auth-shape-three { width: 430px; height: 180px; bottom: -22px; left: 20%; background: #e1d0b9; border-radius: 55% 45% 30% 70% / 63% 36% 64% 37%; }
-.page .auth-shape-four { width: 180px; height: 180px; right: 10%; bottom: 12%; background: #b99e84; border-radius: 50%; opacity: .4; }
 .page .animated-balance .balance-pan { transform-box: fill-box; transform-origin: center; will-change: transform; }
 .page .animated-balance .balance-pan-left, .page .animated-balance .balance-pan-right { animation: none; }
 .page .auth-card { transform: translate3d(var(--card-x, 0px), var(--card-y, 0px), 0) rotateX(var(--card-ry, 0deg)) rotateY(var(--card-rx, 0deg)); }
 
-@media (max-width: 650px) {
-  .page .auth-shape { filter: blur(6px); opacity: .58; }
-}
+/* A.4.4 uses one tester-selected observation unit for the entire test. */
+.zero-observation-unit select { display: block; width: 190px; min-height: 46px; margin-top: 7px; padding: 10px 13px; border: 1px solid var(--taupe); border-radius: 8px; background: #fffefa; color: var(--charcoal); font: 500 15px/1.2 Inter, sans-serif; outline: 0; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+.zero-observation-unit select:hover { background: #fffaf1; }
+.zero-observation-unit select:focus { border-color: var(--brown); box-shadow: 0 0 0 4px rgba(75, 41, 24, .1); }
+.performance-primary:active, .performance-secondary:active, .save-point:active { transform: translateY(1px); box-shadow: none; }
+.performance-primary:focus-visible, .performance-secondary:focus-visible, .save-point:focus-visible, .zero-observation-unit select:focus-visible { outline: 3px solid rgba(75, 41, 24, .22); outline-offset: 2px; }
+.performance-primary:disabled, .performance-secondary:disabled, .save-point:disabled { cursor: not-allowed; opacity: .58; transform: none; box-shadow: none; }
+.save-point { width: auto; min-width: 31px; padding: 0 7px; transition: transform .15s ease, box-shadow .15s ease, background .15s ease; }
+@media (prefers-reduced-motion: reduce) { .performance-primary, .performance-secondary, .save-point { transition: none; } }
+.recommended-phase, .recommended-load-reason, .recommended-load-maximum { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+.recommended-load-reason { color: var(--stone); font-weight: 600; letter-spacing: 0; text-transform: none; }
+.recommended-load-maximum { color: var(--brown); }
+.math-variable { white-space: nowrap; }
+.math-variable sub, .performance-panel sub, .review-document sub { position: relative; top: .08em; font-size: .82em; font-weight: 700; line-height: 0; }
+.zero-observation-unit-help { display: block; max-width: 230px; margin-top: 5px; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.35; }
+.performance-plan-status { white-space: nowrap; }
+.performance-panel .table-wrap { overflow-x: visible; }
+.performance-panel table { min-width: 0; table-layout: auto; }
+.performance-panel th, .performance-panel td { padding-left: 7px; padding-right: 7px; }
+.performance-panel td input, .performance-panel td select { min-width: 62px; padding-left: 6px; padding-right: 6px; }
+@media (max-width: 650px) { .zero-observation-unit select { width: 100%; } .performance-plan-status { white-space: normal; } }
+/* Structured report-review presentation. Keeps the saved report read-only
+   while giving the reviewer a document-like hierarchy. */
+.review-summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); background: var(--charcoal); color: var(--ivory); }
+.review-summary-metric { min-height: 84px; padding: 18px 20px; border-right: 1px solid rgba(231,221,201,.2); }
+.review-summary-metric:last-child { border-right: 0; }
+.review-summary-metric small, .review-summary-metric strong { display: block; }
+.review-summary-metric small { margin-bottom: 8px; color: var(--taupe); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.review-summary-metric strong { color: var(--ivory); font-size: 16px; }
+.review-document { display: grid; gap: 16px; margin-top: 18px; }
+.review-section { padding: 25px 28px; border: 1px solid var(--line); background: var(--surface); }
+.review-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 21px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.review-section-heading h2 { margin: 2px 0 0; font: 700 22px/1.15 Manrope, Inter, sans-serif; color: var(--ink); }
+.review-section-heading > span { color: var(--stone); font-size: 14px; }
+.review-section-kicker { color: var(--brown); font-size: 12px; font-weight: 800; letter-spacing: .13em; }
+.review-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; }
+.review-field small, .review-field strong { display: block; }
+.review-field small { margin-bottom: 6px; color: var(--stone); font-size: 13px; }
+.review-field strong { color: var(--ink); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+.review-subsection + .review-subsection { margin-top: 25px; padding-top: 22px; border-top: 1px solid var(--line); }
+.review-subsection h3 { margin: 0 0 15px; color: var(--charcoal); font-size: 16px; }
+.review-route-table { border-top: 1px solid var(--line); }
+.review-route-header, .review-route-row { display: grid; grid-template-columns: 90px minmax(240px, 1.8fr) minmax(150px, 1fr) 120px; align-items: center; gap: 18px; }
+.review-route-header { padding: 11px 14px; color: var(--stone); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.review-route-row { min-height: 74px; padding: 14px; border-top: 1px solid var(--line); }
+.review-route-code { color: var(--brown); font-weight: 800; }
+.review-route-row strong, .review-route-row small { display: block; }
+.review-route-row strong { color: var(--ink); font-size: 15px; }
+.review-route-row small { margin-top: 4px; color: var(--stone); font-size: 13px; }
+.review-state { font-size: 12px; font-weight: 800; letter-spacing: .06em; }
+.review-state.completed { color: #315f3d; }.review-state.attention { color: #9b3d2f; }.review-state.progress { color: var(--brown); }.review-state.pending { color: var(--stone); }.review-state.muted { color: var(--taupe); }
+.review-route-result { color: var(--charcoal); font-size: 14px; font-weight: 700; }
+.review-result-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.review-result-card { padding: 17px 18px; border-left: 3px solid var(--brown); background: #faf5eb; }
+.review-result-card small, .review-result-card strong { display: block; }
+.review-result-card small { color: var(--stone); font-size: 13px; }.review-result-card p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.review-result-status { margin-top: 6px; color: var(--brown); font-size: 15px; text-transform: uppercase; }.review-result-status.pass { color: #315f3d; }.review-result-status.fail { color: #9b3d2f; }
+.review-detail { margin-top: 22px; padding-top: 17px; border-top: 1px solid var(--line); }.review-detail summary, .review-detail-link { color: var(--brown); font-size: 14px; font-weight: 700; cursor: pointer; }.review-detail-link { display: inline-block; margin-top: 17px; }
+.review-attention { display: grid; gap: 12px; }.review-attention-lead { margin: 0 0 5px; color: #9b3d2f; font-size: 15px; font-weight: 700; }.review-attention-item { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 16px; border: 1px solid #d9b8ad; background: #fff8f5; }.review-attention-item strong, .review-attention-item span { display: block; }.review-attention-item strong { color: var(--ink); font-size: 14px; }.review-attention-item span { margin-top: 4px; color: var(--muted); font-size: 14px; }.review-attention-item a { flex: none; color: #9b3d2f; font-size: 14px; font-weight: 700; }
+.review-overall { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 27px 29px; border: 1px solid var(--brown); background: var(--brown); color: var(--ivory); }.review-overall h2 { margin: 8px 0 5px; font: 700 34px/1.05 Manrope, Inter, sans-serif; }.review-overall p { margin: 0; color: rgba(247,240,226,.78); font-size: 14px; }.review-overall .technical-label { color: var(--sand); }.review-overall.pass { border-color: #315f3d; background: #315f3d; }.review-overall.fail { border-color: #7a2d26; background: #7a2d26; }.review-overall-counts { display: grid; grid-template-columns: auto auto; gap: 3px 12px; min-width: 120px; }.review-overall-counts strong { font-size: 21px; text-align: right; }.review-overall-counts span { color: var(--sand); font-size: 13px; }
+.review-submit-area { display: flex; align-items: center; justify-content: flex-end; gap: 22px; flex: 1; }.review-submit-area p { margin: 0; color: var(--muted); font-size: 14px; text-align: right; }
+@media (max-width: 760px) { .review-summary-strip { grid-template-columns: 1fr 1fr; }.review-summary-metric:nth-child(2) { border-right: 0; }.review-summary-metric:nth-child(n+3) { border-top: 1px solid rgba(231,221,201,.2); }.review-route-header { display: none; }.review-route-row { grid-template-columns: 70px 1fr; gap: 8px 15px; }.review-route-row > :nth-child(3), .review-route-row > :nth-child(4) { grid-column: 2; }.review-result-summary, .review-fields { grid-template-columns: 1fr; }.review-section { padding: 20px 18px; }.review-overall, .review-submit-area { align-items: flex-start; flex-direction: column; }.review-submit-area p { text-align: left; }.review-submit-area .report-primary { width: 100%; } }
+.eccentricity-logical-note { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.eccentricity-diagram.logical-support { display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 14px; border: 0; background: transparent; overflow: visible; }
+.eccentricity-diagram.logical-support .eccentricity-segment { flex: 0 0 88px; min-height: 88px; border: 1px solid var(--taupe); border-radius: 50%; background: var(--sand); }
+@media (max-width: 1050px) { .performance-panel .table-wrap { overflow-x: auto; }.performance-panel table { min-width: 1040px; } }

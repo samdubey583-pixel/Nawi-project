@@ -1,6 +1,14 @@
 import mongoose, { Schema } from 'mongoose';
 
 const numberField = { type: Number, required: false };
+const indicatingDeviceSchema = new Schema({
+  deviceId: { type: String, required: true },
+  label: { type: String, required: true },
+  type: { type: String, enum: ['DISPLAY', 'PRINTING', 'TARE_WEIGHING', 'OTHER'] },
+  unit: { type: String, enum: ['mg', 'g', 'kg', 't'] },
+  inputIndication: numberField,
+  indication: numberField,
+}, { _id: false });
 const pointSchema = new Schema({
   sequence: { type: Number, required: true },
   direction: { type: String, enum: ['INCREASING', 'DECREASING'], required: true },
@@ -12,6 +20,10 @@ const pointSchema = new Schema({
   // preserve the laboratory-entered observation and its explicit unit.
   loadL: numberField, indicationI: numberField, deltaL: numberField,
   inputLoadL: numberField, inputIndicationI: numberField, inputDeltaL: numberField,
+  // Optional for backwards compatibility. When multiple indicating devices
+  // are configured, Device 1 is the existing A.4.4 indication and additional
+  // device readings are stored here for the derived A.4.5 comparison.
+  indicatingDevices: [indicatingDeviceSchema],
   trueIndicationP: numberField, rawErrorE: numberField, correctedErrorEc: numberField,
   accuracyClass: String, e: numberField, m: numberField,
   mpeMultiplier: numberField, mpeValue: numberField, mpeUnit: String,
@@ -38,9 +50,14 @@ const performanceSchema = new Schema({
   ruleVersion: String,
   supported: { type: Boolean, default: true },
   supportReason: String,
-  instrumentSnapshot: { accuracyClass: String, unit: { type: String, enum: ['mg', 'g', 'kg', 't'], default: 'g' }, max: Number, min: Number, e: Number, d: Number, n: Number },
+  instrumentSnapshot: { accuracyClass: String, unit: { type: String, enum: ['mg', 'g', 'kg', 't'], default: 'g' }, max: Number, min: Number, e: Number, d: Number, n: Number, multipleIndicatingDevices: Boolean },
+  // One tester-facing unit applies to every A.4.4 load-point observation.
+  // Older sessions may omit this and are read using the snapshot unit.
+  observationUnit: { type: String, enum: ['mg', 'g', 'kg', 't'] },
   zeroReference: { unit: { type: String, enum: ['mg', 'g', 'kg', 't'] }, zeroIndication: numberField, deltaL0: numberField, inputZeroIndication: numberField, inputDeltaL0: numberField, calculatedE0: numberField, recordedAt: Date },
-  loadPlan: [{ sequence: Number, direction: String, recommendedLoad: Number, required: Boolean }],
+  // phase/isMaximumPoint make the canonical increasing -> maximum -> decreasing
+  // route explicit. They remain optional so historical sessions can still load.
+  loadPlan: [{ sequence: Number, phase: { type: String, enum: ['INCREASING', 'DECREASING'] }, direction: String, recommendedLoad: Number, recommendedLoadCanonical: Number, recommendedLoadDisplay: { value: Number, unit: { type: String, enum: ['mg', 'g', 'kg', 't'] } }, reason: { type: String, enum: ['MIN', 'MPE_TRANSITION', 'SUPPLEMENTARY', 'MAX'] }, recommendationReason: { type: String, enum: ['MIN', 'MPE_TRANSITION', 'SUPPLEMENTARY', 'MAX'] }, isMaximumPoint: Boolean, isMax: Boolean, isMin: Boolean, isMpeTransition: Boolean, isSupplementary: Boolean, required: Boolean }],
   loadPoints: [pointSchema],
   startedAt: Date, completedAt: Date,
   events: [eventSchema],
