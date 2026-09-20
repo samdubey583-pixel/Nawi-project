@@ -27,6 +27,7 @@ export const evidenceDefinitions: Record<string, EvidenceDefinition[]> = {
     { type: 'mounting_surface', label: 'A.4.13 · Mounting Surface', category: 'SITE', requirementLevel: 'optional', description: 'Mounting surface conformity and installation context.' },
     { type: 'installation', label: 'A.4.13 · Installation', category: 'SITE', requirementLevel: 'optional', description: 'Installed bridge and support arrangement.' },
   ],
+  'A.4.6': [{ type: 'tare_setup', label: 'A.4.6 · Tare · Test Setup', category: 'TEST_SETUP', requirementLevel: 'optional', description: 'Tare arrangement and test setup context.' }],
   'A.5.1': [{ type: 'tilt_setup', label: 'A.5.1 · Tilt · Test Setup', category: 'TEST_SETUP', requirementLevel: 'optional', description: 'Tilt arrangement and physical reference.' }],
   'A.5.3': [{ type: 'temperature_setup', label: 'A.5.3 · Temperature · Test Setup', category: 'ENVIRONMENT', requirementLevel: 'optional', description: 'Environmental chamber or temperature condition.' }],
   'A.5.4': [{ type: 'power_source_setup', label: 'A.5.4 · Power · Test Setup', category: 'POWER', requirementLevel: 'optional', description: 'Power source and voltage condition.' }],
@@ -40,4 +41,10 @@ export const evidenceDefinitions: Record<string, EvidenceDefinition[]> = {
 export function findEvidenceDefinition(testId: string | undefined, evidenceType: string) {
   const definitions = evidenceDefinitions[testId || 'INSTRUMENT'] || evidenceDefinitions.INSTRUMENT;
   return definitions.find(item => item.type === evidenceType) || { type: evidenceType, label: evidenceType.replace(/_/g, ' '), category: 'OTHER', requirementLevel: 'optional' as const, description: 'Supporting evidence.' };
+}
+
+export function requiredEvidenceTestIds() {
+  return Object.entries(evidenceDefinitions)
+    .filter(([, definitions]) => definitions.some(definition => definition.requirementLevel === 'required'))
+    .map(([testId]) => testId);
 }

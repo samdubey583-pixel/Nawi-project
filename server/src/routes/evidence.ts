@@ -8,7 +8,7 @@ import { Evidence } from '../models/Evidence.js';
 import { MobileEvidenceSession } from '../models/MobileEvidenceSession.js';
 import { findEvidenceDefinition } from '../services/evidenceDefinitions.js';
 import { hasTesterReportAccess } from '../services/reportAccess.js';
-import { createEvidenceToken, hashEvidenceToken, sessionAcceptsUpload } from '../services/evidenceSession.js';
+import { buildEvidenceCaptureUrl, createEvidenceToken, hashEvidenceToken, resolveEvidenceCaptureBaseUrl, sessionAcceptsUpload } from '../services/evidenceSession.js';
 
 const r = Router();
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -37,12 +37,12 @@ function publicEvidence(evidence: any) {
   return value;
 }
 
-function publicSession(session: any, token?: string) {
+function publicSession(session: any, token?: string, captureBaseUrl?: string) {
   const value: any = session.toObject ? session.toObject() : { ...session };
   delete value.tokenHash;
   delete value.__v;
   value.id = String(value._id);
-  if (token) value.captureUrl = `${process.env.MOBILE_CAPTURE_BASE_URL || process.env.CLIENT_URL || 'http://localhost:5173'}/mobile/evidence/${token}`;
+  if (token) value.captureUrl = buildEvidenceCaptureUrl(token, captureBaseUrl);
   return value;
 }
 
@@ -102,10 +102,11 @@ r.post('/evidence/mobile-session', requireAuth, requireRole('TESTER'), async (re
     if (!report || !hasTesterReportAccess(report, req.user._id)) return res.status(404).json({ message: 'Test report not found.' });
     if (lockedReport(report)) return res.status(409).json({ message: 'Evidence cannot be added after the report is locked.' });
     if (!report.instrumentId) return res.status(409).json({ message: 'This report has no linked instrument.' });
+    const captureBaseUrl = resolveEvidenceCaptureBaseUrl();
     const body = z.object({ reportId: z.string().min(1), testId: z.string().trim().max(80).optional().default(''), subtestId: z.string().trim().max(120).optional().default(''), category: z.string().trim().max(60).default('OTHER'), evidenceType: z.string().trim().max(100), title: z.string().trim().max(200).optional().default(''), label: z.string().trim().max(240), testName: z.string().trim().max(200).optional().default(''), oimlReference: z.string().trim().max(120).optional().default('') }).parse(req.body);
     const rawToken = createEvidenceToken();
     const session = await MobileEvidenceSession.create({ ...body, testerNameSnapshot: userName(req.user), tokenHash: hashEvidenceToken(rawToken), reportId: report._id, instrumentId: report.instrumentId, testerId: req.user._id, status: 'ACTIVE', expiresAt: new Date(Date.now() + sessionTtlMs) });
-    res.status(201).json({ session: publicSession(session, rawToken) });
+    res.status(201).json({ session: publicSession(session, rawToken, captureBaseUrl) });
   } catch (e) { next(e); }
 });
 
@@ -125,7 +126,7 @@ r.delete('/evidence/mobile-session/:sessionId', requireAuth, requireRole('TESTER
 });
 
 r.get('/reports/:reportId/evidence', requireAuth, requireRole('TESTER'), async (req: any, res, next) => {
-  try { const report = await ownedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const filter: any = { reportId: report._id, status: 'ACTIVE' }; if (req.query.testId) filter.testId = String(req.query.testId); const evidence = await Evidence.find(filter).select('-data').sort({ createdAt: -1 }); res.json({ evidence: evidence.map(publicEvidence) }); } catch (e) { next(e); }
+  try { const report = await ownedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const filter: any = { reportId: report._id, status: 'ACTIVE' }; if (req.query.testId) filter.testId = String(req.query.testId); if (req.query.subtestId) filter.subtestId = String(req.query.subtestId); const evidence = await Evidence.find(filter).select('-data').sort({ createdAt: -1 }); res.json({ evidence: evidence.map(publicEvidence) }); } catch (e) { next(e); }
 });
 
 r.post('/reports/:reportId/evidence', requireAuth, requireRole('TESTER'), async (req: any, res, next) => {

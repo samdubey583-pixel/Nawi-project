@@ -16,22 +16,25 @@ const readDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
 export default function MobileEvidencePage() {
   const { token = '' } = useParams();
   const [session, setSession] = useState<MobileSession | null>(null);
+  const [loading, setLoading] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     try {
-      const response = await axios.get(`/evidence/mobile/${encodeURIComponent(token)}`);
+      const response = await axios.get(`/evidence/mobile/${encodeURIComponent(token)}`, { timeout: 10000 });
+      if (!response.data?.session) throw new Error('This evidence session response was invalid.');
       setSession(response.data.session);
       setError('');
     } catch (e: any) {
       setError(e.response?.data?.message || 'This evidence session is unavailable.');
-    }
+    } finally { setLoading(false); }
   };
   useEffect(() => { if (token) void load(); }, [token]);
 
@@ -64,7 +67,8 @@ export default function MobileEvidencePage() {
   const resetCapture = () => { setFile(null); setPreview(''); setNotes(''); setMessage(''); setError(''); };
 
   if (error && !session) return <main className="mobile-evidence-page"><section className="mobile-evidence-card"><span className="technical-label">NAWI EVIDENCE CAPTURE</span><h1>Evidence session unavailable</h1><p>{error}</p></section></main>;
-  if (!session) return <main className="mobile-evidence-page"><section className="mobile-evidence-card"><span className="technical-label">NAWI EVIDENCE CAPTURE</span><h1>Opening secure session…</h1></section></main>;
+  if (loading && !session) return <main className="mobile-evidence-page"><section className="mobile-evidence-card"><span className="technical-label">NAWI EVIDENCE CAPTURE</span><h1>Opening secure session…</h1></section></main>;
+  if (!session) return <main className="mobile-evidence-page"><section className="mobile-evidence-card"><span className="technical-label">NAWI EVIDENCE CAPTURE</span><h1>Evidence session unavailable</h1><p>{error || 'This evidence session is unavailable.'}</p></section></main>;
   const closed = !['ACTIVE', 'UPLOADING'].includes(session.status);
   return <main className="mobile-evidence-page"><section className="mobile-evidence-card">
     <span className="technical-label">NAWI EVIDENCE CAPTURE</span><h1>{session.label || 'Supporting evidence'}</h1>
@@ -72,9 +76,10 @@ export default function MobileEvidencePage() {
     {error && <div className="mobile-evidence-error">{error}</div>}
     {message && <div className="mobile-evidence-success"><Check size={17} /> {message}</div>}
     {closed ? <div className="mobile-evidence-closed"><Check size={28} /><strong>This evidence session is {session.status.toLowerCase()}.</strong><span>You can now close this page.</span></div> : !preview ? <>
-      <button className="mobile-evidence-primary" onClick={() => inputRef.current?.click()}><Camera size={19} /> Take Photo</button>
-      <input ref={inputRef} className="evidence-file-input" type="file" accept="image/*" capture="environment" onChange={event => { chooseFile(event.target.files?.[0]); event.currentTarget.value = ''; }} />
-      <p className="mobile-evidence-help">The photo will be attached to this report and test automatically.</p>
+      <div className="mobile-evidence-capture-actions"><button className="mobile-evidence-primary" onClick={() => cameraInputRef.current?.click()}><Camera size={19} /> Take Photo</button><button className="mobile-evidence-secondary" onClick={() => fileInputRef.current?.click()}>Choose Photo</button></div>
+      <input ref={cameraInputRef} className="evidence-file-input" type="file" accept="image/*" capture="environment" onChange={event => { chooseFile(event.target.files?.[0]); event.currentTarget.value = ''; }} />
+      <input ref={fileInputRef} className="evidence-file-input" type="file" accept="image/*" onChange={event => { chooseFile(event.target.files?.[0]); event.currentTarget.value = ''; }} />
+      <p className="mobile-evidence-help">Connect your phone to the same Wi-Fi network as this computer. The photo will be attached to this report and test automatically.</p>
     </> : <>
       <img className="mobile-evidence-preview" src={preview} alt="Selected evidence preview" />
       <label className="mobile-evidence-notes">Optional notes<textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What does this image show?" /></label>

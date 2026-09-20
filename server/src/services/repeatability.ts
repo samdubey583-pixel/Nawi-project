@@ -6,6 +6,15 @@ export const REPEATABILITY_TEST_VERSION = 'R76-A4.10-1.0';
 export const REPEATABILITY_SOURCE = 'OIML R 76-1:2006 §3.6.1 / Annex A A.4.10';
 export const REPEATABILITY_RULE_REFERENCE = 'OIML R 76-1:2006 §3.6.1 / Annex A A.4.10';
 
+export function procedureConfirmationReady(input: {
+  automaticRequired: boolean;
+  automaticZeroOnConfirmed?: boolean;
+  unloadedInstrumentRestConfirmed?: boolean;
+}) {
+  return input.unloadedInstrumentRestConfirmed === true
+    && (!input.automaticRequired || input.automaticZeroOnConfirmed === true);
+}
+
 export type RepeatabilityControlStage = 'TYPE_APPROVAL' | 'VERIFICATION';
 export type RepeatabilityPlanInput = {
   controlStage: RepeatabilityControlStage;

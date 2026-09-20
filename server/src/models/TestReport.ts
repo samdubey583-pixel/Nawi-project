@@ -38,6 +38,12 @@ const testReportSchema = new Schema({
   testerNameSnapshot: { type: String, default: '' },
   testerRole: { type: String, default: '' },
   assignedAt: Date,
+  reviewerId: { type: Schema.Types.ObjectId, ref: 'User' },
+  reviewerNameSnapshot: { type: String, default: '' },
+  reviewComment: { type: String, default: '' },
+  submittedForReviewAt: Date,
+  reviewedAt: Date,
+  resubmittedAt: Date,
 }, { timestamps: true, collection: 'testReports' });
 
 export const TestReport = model('TestReport', testReportSchema);

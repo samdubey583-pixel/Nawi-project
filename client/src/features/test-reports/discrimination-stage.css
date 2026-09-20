@@ -1,0 +1,215 @@
+.discrimination-step-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.discrimination-stage-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.2rem;
+  padding: .85rem 1rem;
+  border: 1px solid #d6c9b6;
+  background: #f4ecdf;
+}
+
+.discrimination-stage-meta > span {
+  color: #625b52;
+  font-size: .9rem;
+}
+
+.discrimination-stage-meta > span b {
+  color: #0b0a09;
+  font: 700 1rem Manrope, sans-serif;
+}
+
+.discrimination-stage-meta label {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  color: #0b0a09;
+  font-size: .86rem;
+  font-weight: 700;
+}
+
+.discrimination-stage-meta select {
+  min-height: 40px;
+  padding: .55rem .7rem;
+  border: 1px solid #bcae9b;
+  background: #fff;
+  color: #0b0a09;
+  font: 500 .95rem Inter, sans-serif;
+}
+
+.discrimination-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: .85rem;
+  padding: 1.1rem;
+  border: 1px solid #d6c9b6;
+  background: #fdf9f1;
+}
+
+.discrimination-step-number {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #4b2918;
+  color: #f7f0e2;
+  font: 700 .85rem Manrope, sans-serif;
+}
+
+.discrimination-step h3 {
+  margin: .3rem 0 .9rem;
+  font: 700 1.05rem Manrope, sans-serif;
+}
+
+.discrimination-input-label {
+  display: grid;
+  gap: .4rem;
+  font-weight: 700;
+  font-size: .86rem;
+}
+
+.discrimination-input-label input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: .7rem .8rem;
+  border: 1px solid #bcae9b;
+  background: #fff;
+  color: #0b0a09;
+  font: 500 .95rem Inter, sans-serif;
+}
+
+.discrimination-readonly {
+  margin-top: .85rem;
+  padding: .7rem .8rem;
+  border-left: 2px solid #b9aa96;
+  background: #f4ecdf;
+}
+
+.discrimination-readonly small,
+.discrimination-procedure-values small,
+.discrimination-check small {
+  display: block;
+  color: #858078;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+
+.discrimination-readonly b,
+.discrimination-procedure-values b,
+.discrimination-check b {
+  display: block;
+  margin-top: .25rem;
+  color: #0b0a09;
+  font: 700 1rem Manrope, sans-serif;
+}
+
+.discrimination-procedure-step {
+  grid-column: span 2;
+}
+
+.discrimination-procedure-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .7rem;
+  margin-top: .8rem;
+}
+
+.discrimination-procedure-values div {
+  padding: .7rem .8rem;
+  background: #f4ecdf;
+}
+
+.discrimination-note,
+.discrimination-validation-note {
+  color: #625b52;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+
+.discrimination-check {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 1rem;
+  border: 1px solid #cfc1ae;
+  background: #cfc1ae;
+}
+
+.discrimination-check > div {
+  padding: .9rem;
+  background: #fffdf8;
+}
+
+.discrimination-check-result.pass {
+  background: #e1efe1;
+  color: #245b39;
+}
+
+.discrimination-check-result.fail {
+  background: #f5ded8;
+  color: #8d2b20;
+}
+
+.discrimination-check-result.incomplete {
+  background: #f4ecdf;
+  color: #625b52;
+}
+
+.discrimination-fields-secondary {
+  margin-top: 1rem;
+}
+
+.discrimination-fields-secondary label {
+  display: grid;
+  gap: .4rem;
+  font-weight: 700;
+  font-size: .86rem;
+}
+
+.discrimination-fields-secondary select,
+.discrimination-fields-secondary textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: .7rem .8rem;
+  border: 1px solid #bcae9b;
+  background: #fff;
+  color: #0b0a09;
+  font: 500 .95rem Inter, sans-serif;
+}
+
+.discrimination-fields-secondary textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+@media (max-width: 760px) {
+  .discrimination-stage-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .discrimination-stage-meta label {
+    justify-content: space-between;
+  }
+
+  .discrimination-step-grid,
+  .discrimination-procedure-values,
+  .discrimination-check {
+    grid-template-columns: 1fr;
+  }
+
+  .discrimination-procedure-step {
+    grid-column: auto;
+  }
+}

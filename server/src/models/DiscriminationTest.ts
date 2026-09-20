@@ -18,7 +18,10 @@ const stageSchema = new Schema({
   stageId: { type: String, enum: ['MIN', 'HALF_MAX', 'MAX'], required: true }, label: String, order: Number,
   targetLoad: massSchema, oneTenthD: massSchema, onePointFourD: massSchema,
   recommendedIncrementCount: Number,
-  status: { type: String, enum: ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED'], default: 'NOT_STARTED' },
+  // Stage workflow states are persisted independently from the parent test.
+  // AVAILABLE/LOCKED are used by the sequential three-load workflow, just as
+  // they are for the other staged test models.
+  status: { type: String, enum: ['NOT_STARTED', 'AVAILABLE', 'IN_PROGRESS', 'COMPLETED', 'LOCKED'], default: 'NOT_STARTED' },
   observation: observationSchema, result: { type: String, enum: ['NOT_DETERMINED', 'PASS', 'FAIL', 'INCOMPLETE'] }, completedAt: Date,
 }, { _id: false });
 

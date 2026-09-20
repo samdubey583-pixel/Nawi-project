@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { evaluateRepeatabilityResults, getRepeatabilityPlan, calculateRepeatabilityObservation } from './repeatability.js';
+import { evaluateRepeatabilityResults, getRepeatabilityPlan, calculateRepeatabilityObservation, procedureConfirmationReady } from './repeatability.js';
 
 const base = { accuracyClass: 'II', max: 100000, min: 200, e: 10, d: 1, massUnit: 'g' as const };
+
+test('requires actual boolean procedure confirmations before saving', () => {
+  assert.equal(procedureConfirmationReady({ automaticRequired: true, automaticZeroOnConfirmed: true, unloadedInstrumentRestConfirmed: true }), true);
+  assert.equal(procedureConfirmationReady({ automaticRequired: true, automaticZeroOnConfirmed: false, unloadedInstrumentRestConfirmed: true }), false);
+  assert.equal(procedureConfirmationReady({ automaticRequired: true, automaticZeroOnConfirmed: true, unloadedInstrumentRestConfirmed: false }), false);
+  assert.equal(procedureConfirmationReady({ automaticRequired: false, unloadedInstrumentRestConfirmed: true }), true);
+});
 
 test('plans Verification from Max and class without UI-entered target loads', () => {
   const plan = getRepeatabilityPlan({ ...base, controlStage: 'VERIFICATION' });

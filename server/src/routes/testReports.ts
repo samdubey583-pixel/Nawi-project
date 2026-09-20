@@ -17,7 +17,10 @@ import { ZeroCheckingTest } from '../models/ZeroCheckingTest.js';
 import { ZeroSettingBeforeLoadingTest } from '../models/ZeroSettingBeforeLoadingTest.js';
 import { sourceFingerprint, sourcePhaseFromTest, sourcePhaseIsComplete } from '../services/zeroSettingBeforeLoading.js';
 import { TareTest } from '../models/TareTest.js';
-import { calculateNetLoad, generateTareLoadPlan, tareSettingAccuracyResult } from '../services/tareCalculations.js';
+import { calculateNetLoad, calculateTareSettingObservation, deriveTareSettingProcedure, deriveTareSettingProcedureFromSnapshots, evaluateTareCompletion, evaluateTareSettingCompletion, generateTareLoadPlan, tareSettingAccuracyResult, validateTareLoadObservation, validateTareSettingObservation } from '../services/tareCalculations.js';
+import { calculateTareDeviceComparison, tareDeviceCompletionAllowed, tareDeviceObservationLimitReached, validateTareDeviceComparison } from '../services/tareDeviceComparison.js';
+import { activateNextApplicableTarePhase, deriveTareReadiness, tareConfigurationsMatch, tareSettingExecutionHasBegun } from '../services/tareWorkflow.js';
+import { recalculateTareLoadPhase, recalculateTareSettingPhase, tareObservationIdentity, tareSettingObservationLimitReached, tareSettingPhaseIsMutable } from '../services/tareObservationWorkflow.js';
 import { validateScaleIntervals } from '../services/scaleInterval.js';
 import { EccentricityTest } from '../models/EccentricityTest.js';
 import { MultipleIndicatingDeviceTest } from '../models/MultipleIndicatingDeviceTest.js';
@@ -28,10 +31,10 @@ import { DiscriminationTest } from '../models/DiscriminationTest.js';
 import { SensitivityTest } from '../models/SensitivityTest.js';
 import { evaluateSensitivityObservation, requiredExtraLoad, requiredPermanentDisplacement, sensitivityFingerprint, sensitivityStages, SENSITIVITY_DISPLACEMENT_RULE, SENSITIVITY_MPE_RULE, SENSITIVITY_SOURCE, SENSITIVITY_TEST_VERSION } from '../services/sensitivity.js';
 import { RepeatabilityTest } from '../models/RepeatabilityTest.js';
-import { calculateRepeatabilityObservation, evaluateRepeatabilityResults, getRepeatabilityPlan, repeatabilityFingerprint, REPEATABILITY_RULE_REFERENCE, REPEATABILITY_SOURCE, REPEATABILITY_TEST_VERSION, type RepeatabilityControlStage } from '../services/repeatability.js';
+import { calculateRepeatabilityObservation, evaluateRepeatabilityResults, getRepeatabilityPlan, procedureConfirmationReady, repeatabilityFingerprint, REPEATABILITY_RULE_REFERENCE, REPEATABILITY_SOURCE, REPEATABILITY_TEST_VERSION, type RepeatabilityControlStage } from '../services/repeatability.js';
 import { VariationWithTimeTest } from '../models/VariationWithTimeTest.js';
 import { StabilityOfEquilibriumTest } from '../models/StabilityOfEquilibriumTest.js';
-import { calculateVariationMpe, evaluateCreep, evaluateZeroReturn, variationWithTimeFingerprint, variationWithTimePlan, VARIATION_WITH_TIME_ENGINE_VERSION, VARIATION_WITH_TIME_SOURCE, VARIATION_WITH_TIME_TEST_VERSION, type VariationWithTimeCheckpoint } from '../services/variationWithTime.js';
+import { calculateCreepP, calculateVariationMpe, CREEP_CHECKPOINTS, evaluateCreep, evaluateZeroReturn, isValidCreepCheckpoint, variationWithTimeFingerprint, variationWithTimePlan, VARIATION_WITH_TIME_ENGINE_VERSION, VARIATION_WITH_TIME_SOURCE, VARIATION_WITH_TIME_TEST_VERSION, type VariationWithTimeCheckpoint } from '../services/variationWithTime.js';
 import { evaluateDocumentationReview, evaluateInhibition, evaluateStabilitySequence, stabilityFingerprint, stabilityPlan, STABILITY_ENGINE_VERSION, STABILITY_REPETITIONS, STABILITY_RULE_SET, STABILITY_SOURCE, STABILITY_TEST_VERSION, normalizeMass, type StabilityOperation } from '../services/stabilityOfEquilibrium.js';
 import { testerReportAccessFilter, hasTesterReportAccess } from '../services/reportAccess.js';
 import { InfluenceFactorsTest } from '../models/InfluenceFactorsTest.js';
@@ -40,6 +43,8 @@ import { EnduranceTest } from '../models/EnduranceTest.js';
 import { assessDurability, calculateEnduranceWeighing, enduranceApplicability, enduranceFingerprint, endurancePlan, ENDURANCE_CHECKPOINTS, ENDURANCE_ENGINE_VERSION, ENDURANCE_RULE_SET, ENDURANCE_SOURCE, ENDURANCE_TARGET_CYCLES, ENDURANCE_TEST_VERSION, nextCycleCount } from '../services/endurance.js';
 import { applicationMetadataValidationMessage, canEditReportMetadata, normalizeIndianPhone } from '../services/reportMetadata.js';
 import { deriveZeroIndicatorIncrement, validateSignedZeroRanges, validateZeroIndicatorObservations, type ZeroIndicatorObservationInput } from '../services/zeroIndicatorObservations.js';
+import { requiredEvidenceTestIds } from '../services/evidenceDefinitions.js';
+import { missingRoutePrerequisites } from '../services/routePrerequisites.js';
 
 const r = Router();
 const text = z.string().trim().min(1);
@@ -376,21 +381,172 @@ r.post('/:id/zero-setting-before-loading/complete', async (req: any, res, next) 
   } catch (e) { next(e); }
 });
 
-const publicTare = (test: any) => { const value: any = test.toObject ? test.toObject() : { ...test }; delete value._id; delete value.reportId; delete value.testerId; return value; };
+const tareLoadCompletion = (value: any, snapshot: any) => {
+  const tareSnapshot = value.tareConfigurationSnapshot || {};
+  const maximumTareEffect = Number(tareSnapshot.maximumTareEffect?.value);
+  const firstPlanTare = Number(value.loadPlan?.find((item: any) => Number.isFinite(Number(item.representativeTare)))?.representativeTare);
+  return evaluateTareCompletion({
+    observations: value.phases?.find((phase: any) => phase.code === 'A.4.6.1')?.observations,
+    recommendedCount: value.loadPlan?.length || 0,
+    min: Number(snapshot.min),
+    max: Number(snapshot.max),
+    e: Number(snapshot.e),
+    accuracyClass: String(snapshot.accuracyClass || ''),
+    tareType: tareSnapshot.tareType,
+    maximumTareEffect,
+    representativeTare: Number.isFinite(firstPlanTare) ? firstPlanTare : maximumTareEffect / 2,
+    unit: snapshot.unit,
+  });
+};
+
+const publicTare = (test: any, instrumentOverride?: any) => {
+  const value: any = test.toObject ? test.toObject() : { ...test };
+  delete value._id; delete value.reportId; delete value.testerId;
+  if (Array.isArray(value.phases)) value.phases = value.phases.map((phase: any) => ['A.4.6.1', 'A.4.6.2', 'A.4.6.3'].includes(phase.code) ? { ...phase, observations: (phase.observations || []).map((observation: any) => ({ ...observation, observationId: tareObservationIdentity(observation) })) } : phase);
+  const snapshot = { ...(instrumentOverride || {}), ...(value.instrumentSnapshot || {}) };
+  const tareSnapshot = value.tareConfigurationSnapshot || {};
+  const a461 = value.phases?.find((phase: any) => phase.code === 'A.4.6.1');
+  if (a461) {
+    a461.completion = tareLoadCompletion(value, snapshot);
+    const a462 = value.phases?.find((phase: any) => phase.code === 'A.4.6.2');
+    const a462Active = tareSettingExecutionHasBegun(a462);
+    if (a461.completion.complete) {
+      a461.status = a462Active ? 'LOCKED' : 'COMPLETED';
+      if (a462Active) a461.workflowNote = 'A.4.6.1 is locked while A.4.6.2 is being executed to preserve the recorded verification result. This is an application workflow control, not an OIML requirement.';
+    } else if (a461.completion.validObservationCount > 0) {
+      a461.status = 'IN_PROGRESS';
+    }
+  }
+  value.tareSettingProcedure = deriveTareSettingProcedure({ max: Number(snapshot.max), e: Number(snapshot.e), zeroSettingMethod: snapshot.zeroSettingMethod, zeroTracking: snapshot.zeroTracking });
+  const a462 = value.phases?.find((phase: any) => phase.code === 'A.4.6.2');
+  if (a462) {
+    a462.completion = evaluateTareSettingCompletion(a462.observations, value.tareSettingProcedure.repetitions);
+    const a461Completion = a461?.completion;
+    if (a462.applicability === 'APPLICABLE' && !a461Completion?.complete) {
+      a462.status = 'LOCKED';
+      a462.workflowNote = 'Complete A.4.6.1 before starting A.4.6.2. This is an application workflow sequence, not an OIML requirement.';
+    } else if (a462.applicability === 'APPLICABLE' && a462.status === 'LOCKED' && !tareSettingExecutionHasBegun(a462)) {
+      a462.status = 'AVAILABLE';
+      a462.workflowNote = 'A.4.6.2 is available after the completed A.4.6.1 verification. This is an application workflow sequence, not an OIML requirement.';
+    }
+
+    // Later phases are initialized as LOCKED. Once A.4.6.2 is complete,
+    // that persisted workflow gate must be projected as available; otherwise
+    // a locked phase can never be selected by the phase-advance code.
+    const a463 = value.phases?.find((phase: any) => phase.code === 'A.4.6.3');
+    if (a462.applicability === 'APPLICABLE' && a462.completion.complete && a463?.applicability === 'APPLICABLE' && a463.status === 'LOCKED') {
+      a463.status = 'AVAILABLE';
+      a463.workflowNote = 'Available after A.4.6.2 is complete. This is an application workflow sequence, not an OIML requirement.';
+    }
+  }
+  const applicablePhases = value.phases?.filter((phase: any) => phase.applicability === 'APPLICABLE') || [];
+  if (value.status === 'COMPLETED' && applicablePhases.some((phase: any) => ['AVAILABLE', 'IN_PROGRESS'].includes(String(phase.status)))) {
+    value.status = 'IN_PROGRESS';
+    value.result = 'NOT_DETERMINED';
+    value.completedAt = undefined;
+  }
+  if (value.status === 'IN_PROGRESS') {
+    const tareDevice = value.phases?.find((phase: any) => phase.code === 'A.4.6.3' && phase.applicability === 'APPLICABLE' && phase.status === 'LOCKED');
+    if (tareDevice) tareDevice.workflowNote = 'Applicable because a tare-weighing device is configured. The separate comparison module is sequenced by the application.';
+  }
+  return value;
+};
+
+const prepareTareSettingObservation = (report: any, test: any, body: any, sequence: number) => {
+  const snapshot: any = { ...(report.instrument || {}), ...(test.instrumentSnapshot || {}) };
+  const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+  const unit = String(body.unit || instrumentUnit);
+  if (!isMassUnit(unit)) throw Object.assign(new Error('Use a supported mass unit: mg, g, kg, or t.'), { status: 400 });
+  const procedure = deriveTareSettingProcedureFromSnapshots({ reportInstrument: report.instrument || {}, instrumentSnapshot: test.instrumentSnapshot || {} });
+  const validated = validateTareSettingObservation(body.observation || body);
+  if (!validated.valid) throw Object.assign(new Error(Object.values(validated.errors).join(' ')), { status: 400, code: 'INCOMPLETE_OBSERVATION', fields: validated.errors });
+  const input = validated.value;
+  const tareLoad = convertMass(input.tareLoad, unit, instrumentUnit);
+  const indicationI0 = convertMass(input.indicationI0, unit, instrumentUnit);
+  const deltaL = convertMass(input.deltaL, unit, instrumentUnit);
+  const max = Number(snapshot.max);
+  if (tareLoad > max) throw Object.assign(new Error('Tare load must not exceed the verified instrument Max.'), { status: 400 });
+  const calculation = calculateTareSettingObservation({ tareLoad, loadL0: procedure.loadL0, indicationI0, deltaL, e: Number(snapshot.e) });
+  return {
+    procedure,
+    observation: { observationId: crypto.randomUUID(), sequence, unit, inputTareLoad: input.tareLoad, inputIndicationI0: input.indicationI0, inputDeltaL: input.deltaL, tareLoad, loadL0: procedure.loadL0, indicationI0, deltaL, trueIndicationP: calculation.trueIndicationP, errorE0: calculation.errorE0, accuracyLimit: calculation.accuracyLimit, result: calculation.result, notes: input.notes, recordedAt: new Date() },
+  };
+};
+
+const updateTareSettingSummary = (test: any, phase: any, procedure: any) => {
+  const completion = recalculateTareSettingPhase(phase, procedure);
+  test.status = 'IN_PROGRESS';
+  test.result = 'NOT_DETERMINED';
+  test.completedAt = undefined;
+  return completion;
+};
+const tareDeviceReferenceTare = (test: any) => {
+  const phase: any = test.phases?.find((item: any) => item.code === 'A.4.6.1');
+  const observations = Array.isArray(phase?.observations) ? [...phase.observations].reverse() : [];
+  const source = observations.find((item: any) => Number.isFinite(Number(item.tareValue)));
+  return source ? Number(source.tareValue) : undefined;
+};
+const prepareTareDeviceObservation = (report: any, test: any, body: any, sequence: number) => {
+  const snapshot: any = { ...(report.instrument || {}), ...(test.instrumentSnapshot || {}) };
+  const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+  const unit = String(body.unit || instrumentUnit);
+  if (!isMassUnit(unit)) throw Object.assign(new Error('Use a supported mass unit: mg, g, kg, or t.'), { status: 400 });
+  const validated = validateTareDeviceComparison(body.observation || body);
+  if (!validated.valid) throw Object.assign(new Error(Object.values(validated.errors).join(' ')), { status: 400, code: 'INCOMPLETE_OBSERVATION', fields: validated.errors });
+  const input = validated.value;
+  const referenceTare = convertMass(input.referenceTare, unit, instrumentUnit);
+  const tareDeviceIndication = convertMass(input.tareDeviceIndication, unit, instrumentUnit);
+  const mainIndication = convertMass(input.mainIndication, unit, instrumentUnit);
+  const calculation = calculateTareDeviceComparison({ referenceTare, tareDeviceIndication, mainIndication, accuracyClass: String(snapshot.accuracyClass || ''), min: Number(snapshot.min), max: Number(snapshot.max), e: Number(snapshot.e), unit: instrumentUnit });
+  return {
+    observationId: crypto.randomUUID(), sequence, unit,
+    inputReferenceTare: input.referenceTare, inputTareDeviceIndication: input.tareDeviceIndication, inputMainIndication: input.mainIndication,
+    referenceTare, tareDeviceIndication, mainIndication, ...calculation, result: calculation.result, notes: input.notes, recordedAt: new Date(),
+  };
+};
+const recalculateTareDevicePhase = (phase: any) => {
+  const observations = Array.isArray(phase.observations) ? phase.observations : [];
+  const valid = observations.filter((item: any) => [item.referenceTare, item.tareDeviceIndication, item.mainIndication, item.difference, item.comparisonCriterion].every((value: any) => Number.isFinite(Number(value))) && ['PASS', 'FAIL'].includes(String(item.result)));
+  const latest = valid[valid.length - 1];
+  phase.calculations = { observationCount: valid.length, lastDifference: latest?.difference, comparisonCriterion: latest?.comparisonCriterion, comparisonCriterionUnit: latest?.comparisonCriterionUnit, result: latest?.result || 'INCOMPLETE', comparisonCriterionType: 'MPE_DERIVED' };
+  phase.result = valid.length ? (valid.some((item: any) => item.result === 'FAIL') ? 'FAIL' : 'PASS') : 'INCOMPLETE';
+  return { validObservationCount: valid.length, result: phase.result };
+};
 const tareState = async (report: any) => {
   const route = generateApplicability(instrumentProfileFromRecord((report.instrument || {}) as Record<string, unknown>));
   const applicability: any = route.tests.find(test => test.code === 'A.4.6');
   const zeroChecking: any = await ZeroCheckingTest.findOne({ reportId: report._id });
   const fingerprint = sourceFingerprint(zeroChecking);
   const test: any = await TareTest.findOne({ reportId: report._id });
-  const stale = !!test && test.status === 'COMPLETED' && !!fingerprint && test.sourceFingerprint !== fingerprint;
-  return { route, applicability, test, fingerprint, stale };
-};
-const tarePrerequisitesComplete = async (report: any, route: any) => {
-  const before = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.code !== 'A.4.6' && item.order < (route.tests.find((candidate: any) => candidate.code === 'A.4.6')?.order || 0));
-  const [zeroChecking, zeroSettingBeforeLoading, performance] = await Promise.all([ZeroCheckingTest.findOne({ reportId: report._id }), ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }), WeighingPerformanceTest.findOne({ reportId: report._id })]);
-  const zeroSetting: any = zeroSettingBeforeLoading;
-  return before.every((item: any) => item.code === 'A.4.2' ? zeroChecking?.status === 'COMPLETED' : item.code === 'A.4.3' ? zeroSetting?.status === 'COMPLETED' && !zeroSetting?.stale : item.code === 'A.4.4' ? performance?.status === 'COMPLETED' : false);
+  const instrument: any = report.instrument || {};
+  const instrumentUnit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
+  const currentTareConfiguration = {
+    tareDevicePresent: instrument.tareDevicePresent,
+    tareType: instrument.tareType,
+    maximumTareEffect: instrument.maximumTareEffect ? {
+      value: convertMass(Number(instrument.maximumTareEffect.value), isMassUnit(instrument.maximumTareEffect.unit) ? instrument.maximumTareEffect.unit : instrumentUnit, instrumentUnit),
+      unit: instrumentUnit,
+    } : undefined,
+    tareOperationMode: instrument.tareOperationMode,
+    tareWeighingDevicePresent: instrument.tareWeighingDevicePresent,
+    presetTareDevicePresent: instrument.presetTareDevicePresent,
+  };
+  const sourceStale = !!test?.sourceFingerprint && !!fingerprint && test.sourceFingerprint !== fingerprint;
+  const configurationStale = !!test?.tareConfigurationSnapshot && !tareConfigurationsMatch(test.tareConfigurationSnapshot, currentTareConfiguration);
+  const stale = !!test && (sourceStale || configurationStale);
+  const [zeroSettingBeforeLoading, performance, multipleIndicating] = await Promise.all([
+    ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }),
+    WeighingPerformanceTest.findOne({ reportId: report._id }),
+    MultipleIndicatingDeviceTest.findOne({ reportId: report._id }),
+  ]);
+  const zeroSettingStale = zeroSettingBeforeLoading?.status === 'REVALIDATION_REQUIRED' || (zeroSettingBeforeLoading?.status === 'COMPLETED' && !!fingerprint && zeroSettingBeforeLoading.sourceFingerprint !== fingerprint);
+  const readiness = deriveTareReadiness(route.tests, {
+    'A.4.2': { status: zeroChecking?.status, stale: !fingerprint },
+    'A.4.3': { status: zeroSettingBeforeLoading?.status, stale: zeroSettingStale },
+    'A.4.4': { status: performance?.status },
+    'A.4.5': { status: multipleIndicating?.status },
+  });
+  return { route, applicability, test, fingerprint, stale, readiness, sourceStale, configurationStale, currentTareConfiguration };
 };
 const tareEvent = (test: any, action: string, user: any, metadata: any = {}) => { test.events.push({ action, testerId: user._id, testerNameSnapshot: userName(user), timestamp: new Date(), metadata }); };
 const tareE0 = async (report: any) => {
@@ -398,46 +554,64 @@ const tareE0 = async (report: any) => {
   if (!zero || zero.status !== 'COMPLETED' || phase?.status !== 'COMPLETED' || !phase.calculations || !finite(phase.calculations.calculatedE0)) throw Object.assign(new Error('Complete A.4.2.3 before recording tare observations.'), { status: 409 });
   return { zero, phase, value: Number(phase.calculations.calculatedE0) };
 };
-const finishTarePhase = (test: any, phase: any) => { phase.status = 'COMPLETED'; phase.completedAt = new Date(); const next = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && item.status !== 'COMPLETED'); if (next) next.status = 'AVAILABLE'; const required = test.phases.filter((item: any) => item.applicability === 'APPLICABLE'); if (required.every((item: any) => item.status === 'COMPLETED')) { test.status = 'COMPLETED'; test.result = required.some((item: any) => item.result === 'FAIL' || item.observations?.some((observation: any) => observation.complianceResult === 'FAIL')) ? 'FAIL' : 'PASS'; test.completedAt = new Date(); } };
+const prepareTareLoadObservation = async (report: any, test: any, body: any, sequence: number) => {
+  const snapshot: any = { ...(report.instrument || {}), ...(test.instrumentSnapshot || {}) };
+  const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+  const unit = String(body.unit || instrumentUnit);
+  if (!isMassUnit(unit)) throw Object.assign(new Error('Use a supported mass unit: mg, g, kg, or t.'), { status: 400 });
+  const source = await tareE0(report);
+  const validated = validateTareLoadObservation(body.observation || body);
+  if (!validated.valid) throw Object.assign(new Error(Object.values(validated.errors).join(' ')), { status: 400, code: 'INCOMPLETE_OBSERVATION', fields: validated.errors });
+  const input = validated.value;
+  const tareValue = convertMass(input.tareValue, unit, instrumentUnit);
+  const grossLoad = convertMass(input.grossLoad, unit, instrumentUnit);
+  const indicationI = convertMass(input.indicationI, unit, instrumentUnit);
+  const deltaL = convertMass(input.deltaL, unit, instrumentUnit);
+  const max = Number(snapshot.max);
+  if (grossLoad > max) throw Object.assign(new Error('Gross load must not exceed the verified instrument Max.'), { status: 400 });
+  if (tareValue > grossLoad) throw Object.assign(new Error('Tare value cannot exceed gross load.'), { status: 400 });
+  const configuredMaximumTare = Number((test.tareConfigurationSnapshot as any)?.maximumTareEffect?.value);
+  if ((test.tareConfigurationSnapshot as any)?.tareType === 'SUBTRACTIVE' && Number.isFinite(configuredMaximumTare) && (tareValue < configuredMaximumTare / 3 || tareValue > (2 * configuredMaximumTare) / 3)) throw Object.assign(new Error(`For subtractive tare, the tare value used must be between ${configuredMaximumTare / 3} and ${(2 * configuredMaximumTare) / 3} ${instrumentUnit}.`), { status: 400 });
+  const netLoad = calculateNetLoad(grossLoad, tareValue);
+  if (netLoad > max) throw Object.assign(new Error('Net load must not exceed the verified instrument Max.'), { status: 400 });
+  const mpe = getMpe(snapshot.accuracyClass, netLoad, Number(snapshot.e), { min: Number(snapshot.min), max, unit: instrumentUnit, rangeType: 'single-range', loadType: 'NET' });
+  if (!mpe.supported) throw Object.assign(new Error(mpe.reason), { status: 400 });
+  const calculation = calculateChangeoverError(netLoad, indicationI, deltaL, Number(snapshot.e), source.value);
+  const complianceResult = evaluateCompliance(calculation.correctedErrorEc, mpe.mpeValue);
+  return {
+    observationId: crypto.randomUUID(), sequence, unit,
+    inputTareValue: input.tareValue, inputGrossLoad: input.grossLoad, inputIndicationI: input.indicationI, inputDeltaL: input.deltaL,
+    tareValue, grossLoad, netLoad, indicationI, deltaL, direction: input.direction,
+    trueIndicationP: calculation.trueIndicationP, rawErrorE: calculation.rawErrorE, correctedErrorEc: calculation.correctedErrorEc,
+    accuracyClass: mpe.accuracyClass, e: mpe.e, m: mpe.m, mpeMultiplier: mpe.mpeMultiplier, mpeValue: mpe.mpeValue,
+    mpeUnit: mpe.mpeUnit, ruleSetId: mpe.ruleSetId, ruleReference: mpe.ruleReference, ruleVersion: mpe.ruleVersion,
+    complianceResult, result: complianceResult, notes: input.notes, recordedAt: new Date(),
+  };
+};
+const finishTarePhase = (test: any, phase: any) => {
+  phase.status = 'COMPLETED';
+  phase.completedAt = new Date();
+  const currentIndex = test.phases.indexOf(phase);
+  const nextCode = activateNextApplicableTarePhase(test.phases, currentIndex);
+  const next = test.phases.find((item: any) => item.code === nextCode);
+  if (next) {
+    next.workflowNote = 'Available after the preceding applicable A.4.6 phase is complete. This is an application workflow sequence, not an OIML requirement.';
+  }
+  const required = test.phases.filter((item: any) => item.applicability === 'APPLICABLE');
+  if (required.every((item: any) => ['COMPLETED', 'LOCKED'].includes(String(item.status)))) {
+    test.status = 'COMPLETED';
+    test.result = required.some((item: any) => item.result === 'FAIL' || item.observations?.some((observation: any) => observation.complianceResult === 'FAIL')) ? 'FAIL' : 'PASS';
+    test.completedAt = new Date();
+  }
+};
 
-r.get('/:id/tare', async (req: any, res, next) => { try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await tareState(report); const test = state.test ? publicTare(state.test) : null; if (test && state.stale) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; } res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, test }); } catch (e) { next(e); } });
-
-const tareConfigurationInput = z.object({
-  tareType: z.enum(['SUBTRACTIVE', 'ADDITIVE']),
-  maximumTareEffect: z.object({ value: z.number().finite().positive(), unit: z.enum(['mg', 'g', 'kg', 't']) }),
-  tareOperationMode: z.enum(['NON_AUTOMATIC', 'SEMI_AUTOMATIC', 'AUTOMATIC']),
-  tareWeighingDevicePresent: z.boolean(),
-  presetTareDevicePresent: z.boolean(),
-});
+r.get('/:id/tare', async (req: any, res, next) => { try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await tareState(report); const test = state.test ? publicTare(state.test, report.instrument) : null; if (test && state.stale) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; } res.json({ report: report.toObject(), applicability: state.applicability, stale: state.stale, prerequisitesComplete: state.readiness.complete, missingPrerequisites: state.readiness.missing, test }); } catch (e) { next(e); } });
 
 r.patch('/:id/tare/configuration', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req);
     if (!report) return res.status(404).json({ message: 'Test report not found.' });
-    const snapshot: any = report.instrument || {};
-    const profile = instrumentProfileFromRecord(snapshot as Record<string, unknown>);
-    if (profile.tareDevicePresent !== true) return res.status(409).json({ message: 'A.4.6 is not applicable because the instrument has no tare device.', code: 'NOT_APPLICABLE' });
-    const data = tareConfigurationInput.parse(req.body);
-    const existingTest: any = await TareTest.findOne({ reportId: report._id });
-    if (existingTest) {
-      existingTest.revisionHistory = [...(existingTest.revisionHistory || []), { changedAt: new Date(), reason: 'Tare configuration changed after execution began.', previousConfiguration: existingTest.tareConfigurationSnapshot }];
-      existingTest.status = 'REVALIDATION_REQUIRED';
-      existingTest.result = 'REVALIDATION_REQUIRED';
-      tareEvent(existingTest, 'TARE_CONFIGURATION_CHANGED_REVALIDATION_REQUIRED', req.user, { configuration: data });
-      await existingTest.save();
-    }
-    snapshot.tareDevicePresent = true;
-    snapshot.tareDevice = 'Yes';
-    snapshot.tareType = data.tareType;
-    snapshot.maximumTareEffect = data.maximumTareEffect;
-    snapshot.tareOperationMode = data.tareOperationMode;
-    snapshot.tareWeighingDevicePresent = data.tareWeighingDevicePresent;
-    snapshot.presetTareDevicePresent = data.presetTareDevicePresent;
-    report.markModified('instrument');
-    await report.save();
-    const route = generateApplicability(instrumentProfileFromRecord(snapshot as Record<string, unknown>));
-    const applicability: any = route.tests.find(test => test.code === 'A.4.6');
-    res.json({ report: report.toObject(), applicability, stale: Boolean(existingTest), test: existingTest ? publicTare(existingTest) : null });
+    res.status(409).json({ message: 'Tare characteristics are read-only here. Update the instrument or report configuration before starting A.4.6.', code: 'CONFIGURATION_READ_ONLY' });
   } catch (e) { next(e); }
 });
 
@@ -445,40 +619,261 @@ r.post('/:id/tare/start', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await tareState(report);
     if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.6 requires complete tare configuration.', code: 'CONFIGURATION_REQUIRED' });
-    if (!state.fingerprint) return res.status(409).json({ message: 'Complete A.4.2.3 before starting Tare.', code: 'DEPENDENCY_REQUIRED' });
-    if (!(await tarePrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Tare.', code: 'DEPENDENCY_REQUIRED' });
+    if (!state.readiness.complete) {
+      const missing = state.readiness.missing.map(item => item.code).join(', ');
+      return res.status(409).json({ message: `Complete ${missing} before starting Tare.`, code: 'DEPENDENCY_REQUIRED', missingPrerequisites: state.readiness.missing });
+    }
+    if (!state.fingerprint) return res.status(409).json({ message: 'Complete A.4.2.3 before starting Tare.', code: 'DEPENDENCY_REQUIRED', missingPrerequisites: [{ code: 'A.4.2', name: 'Checking of Zero' }] });
     let test: any = state.test;
+    if (test?.status === 'REVALIDATION_REQUIRED' || state.stale) return res.status(409).json({ message: 'The A.4.2 source evidence or tare configuration changed. Revalidate A.4.6 before continuing.', code: 'REVALIDATION_REQUIRED' });
     if (!test) {
       const instrument: any = report.instrument || {}; const config: any = instrument.maximumTareEffect; const instrumentUnit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
       const maxTare = convertMass(Number(config.value), config.unit, instrumentUnit); const requestedTare = req.body.representativeTare === undefined ? undefined : convertMass(Number(req.body.representativeTare), String(req.body.representativeTareUnit || instrumentUnit) as MassUnit, instrumentUnit);
       const plan = generateTareLoadPlan(Number(instrument.min), Number(instrument.max), Number(instrument.e), String(instrument.accuracyClass), instrument.tareType, maxTare, requestedTare); if (!plan.supported) return res.status(409).json({ message: plan.reason, code: 'CONFIGURATION_REQUIRED' });
-      const phases = (state.applicability.phases || []).map((phase: any, index: number, all: any[]) => ({ ...phase, applicability: phase.status, status: phase.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : index === all.findIndex(item => item.status === 'APPLICABLE') ? 'AVAILABLE' : 'LOCKED', observations: [] }));
+      const a461IsApplicable = (state.applicability.phases || []).some((phase: any) => phase.code === 'A.4.6.1' && phase.status === 'APPLICABLE');
+      const phases = (state.applicability.phases || []).map((phase: any, index: number, all: any[]) => ({ ...phase, applicability: phase.status, status: phase.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : phase.code === 'A.4.6.2' && a461IsApplicable ? 'LOCKED' : index === all.findIndex(item => item.status === 'APPLICABLE') ? 'AVAILABLE' : 'LOCKED', observations: [] }));
       const tareConfig = { tareDevicePresent: instrument.tareDevicePresent, tareType: instrument.tareType, maximumTareEffect: { value: maxTare, unit: instrumentUnit }, tareOperationMode: instrument.tareOperationMode, tareWeighingDevicePresent: instrument.tareWeighingDevicePresent, presetTareDevicePresent: instrument.presetTareDevicePresent };
-      test = new TareTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: 'R76-A4.6-1.0', ruleSetId: 'oiml-r76-annex-a-v1', source: 'OIML R 76-1:2006 Annex A A.4.6', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', sourceFingerprint: state.fingerprint, instrumentSnapshot: { accuracyClass: instrument.accuracyClass, unit: instrumentUnit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d }, tareConfigurationSnapshot: tareConfig, loadPlan: plan.loads, phases, startedAt: new Date(), events: [] });
+      test = new TareTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: 'R76-A4.6-1.0', ruleSetId: 'oiml-r76-annex-a-v1', source: 'OIML R 76-1:2006 Annex A A.4.6', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', sourceFingerprint: state.fingerprint, instrumentSnapshot: { accuracyClass: instrument.accuracyClass, unit: instrumentUnit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, zeroSettingMethod: instrument.zeroSettingMethod, zeroTracking: instrument.zeroTracking }, tareConfigurationSnapshot: tareConfig, loadPlan: plan.loads, phases, startedAt: new Date(), events: [] });
       tareEvent(test, 'TARE_TEST_STARTED', req.user, { ruleSetId: 'R76-A4.6-1.0' }); await test.save();
     }
-    report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.status(201).json({ report, applicability: state.applicability, test: publicTare(test) });
+    report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.status(201).json({ report, applicability: state.applicability, test: publicTare(test, report.instrument) });
   } catch (e) { next(e); }
 });
 
 r.patch('/:id/tare/phases/:phaseCode', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const phaseCode = String(req.params.phaseCode); if (!['A.4.6.1', 'A.4.6.2', 'A.4.6.3'].includes(phaseCode)) return res.status(400).json({ message: 'Unknown A.4.6 phase.' });
-    const test: any = await TareTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start the Tare test first.' }); const phase: any = test.phases.find((item: any) => item.code === phaseCode); if (!phase || phase.applicability !== 'APPLICABLE') return res.status(409).json({ message: phase?.reason || 'This A.4.6 phase is not applicable.', code: phase?.applicability || 'NOT_APPLICABLE' });
-    const firstPending = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && item.status !== 'COMPLETED'); const correctingCompletedPhase = phaseCode === 'A.4.6.2' && phase.status === 'COMPLETED'; if ((firstPending?.code !== phaseCode) && !correctingCompletedPhase) return res.status(409).json({ message: 'Complete the previous A.4.6 phase first.', code: 'DEPENDENCY_REQUIRED' });
+    const test: any = await TareTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start the Tare test first.' }); const integrity = await tareState(report); if (test.status === 'REVALIDATION_REQUIRED' || integrity.stale) return res.status(409).json({ message: 'The A.4.2 source evidence or tare configuration changed. Revalidate A.4.6 before continuing.', code: 'REVALIDATION_REQUIRED' }); const phase: any = test.phases.find((item: any) => item.code === phaseCode); if (!phase || phase.applicability !== 'APPLICABLE') return res.status(409).json({ message: phase?.reason || 'This A.4.6 phase is not applicable.', code: phase?.applicability || 'NOT_APPLICABLE' });
+    const a461Phase: any = test.phases.find((item: any) => item.code === 'A.4.6.1');
+    const a462Phase: any = test.phases.find((item: any) => item.code === 'A.4.6.2');
+    if (phaseCode === 'A.4.6.1' && (phase.status === 'LOCKED' || tareSettingExecutionHasBegun(a462Phase))) return res.status(409).json({ message: 'A.4.6.1 is locked while A.4.6.2 is being executed.', code: 'WORKFLOW_LOCKED' });
+    const snapshotForWorkflow: any = test.instrumentSnapshot || {};
+    const a461Completion = tareLoadCompletion(test, snapshotForWorkflow);
+    if (phaseCode === 'A.4.6.2' && !a461Completion.complete) return res.status(409).json({ message: 'Complete A.4.6.1 before starting A.4.6.2.', code: 'DEPENDENCY_REQUIRED', completion: a461Completion });
+    const a462Completion = evaluateTareSettingCompletion(a462Phase?.observations, deriveTareSettingProcedureFromSnapshots({ reportInstrument: report.instrument || {}, instrumentSnapshot: test.instrumentSnapshot || {} }).repetitions);
+    const a463AfterCompletedA462 = phaseCode === 'A.4.6.3' && a462Completion.complete;
+    if (a463AfterCompletedA462 && phase.status === 'LOCKED') phase.status = 'AVAILABLE';
+    const firstPending = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && !['COMPLETED', 'LOCKED'].includes(String(item.status))); const correctingCompletedPhase = phaseCode === 'A.4.6.2' && phase.status === 'COMPLETED'; const combinedWithWeighing = phaseCode === 'A.4.6.2' && phase.status !== 'COMPLETED' && test.status === 'IN_PROGRESS'; if ((firstPending?.code !== phaseCode) && !correctingCompletedPhase && !combinedWithWeighing && !a463AfterCompletedA462) return res.status(409).json({ message: 'Complete the previous A.4.6 phase first.', code: 'DEPENDENCY_REQUIRED' });
     if (phaseCode === 'A.4.6.2' && (phase.observations?.length || phase.calculations)) test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode, previousObservations: phase.observations, previousCalculations: phase.calculations, previousResult: phase.result, reason: 'A.4.6.2 tare-setting observation corrected.' }];
-    const snapshot: any = test.instrumentSnapshot || {}; const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const unit = String(req.body.unit || instrumentUnit); if (!isMassUnit(unit)) return res.status(400).json({ message: 'Use a supported mass unit: mg, g, kg, or t.' }); const source = await tareE0(report); if (test.sourceFingerprint && sourceFingerprint(source.zero) && test.sourceFingerprint !== sourceFingerprint(source.zero)) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), reason: 'The authoritative A.4.2.3 result was corrected.', previousSourceFingerprint: test.sourceFingerprint }]; await test.save(); return res.status(409).json({ message: 'A.4.2.3 changed. Revalidate the Tare test before continuing.', code: 'REVALIDATION_REQUIRED' }); } const e = Number(snapshot.e); const max = Number(snapshot.max);
+    const snapshot: any = phaseCode === 'A.4.6.2' ? { ...(report.instrument || {}), ...(test.instrumentSnapshot || {}) } : (test.instrumentSnapshot || {}); const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const unit = String(req.body.unit || instrumentUnit); if (!isMassUnit(unit)) return res.status(400).json({ message: 'Use a supported mass unit: mg, g, kg, or t.' }); const source = await tareE0(report); if (test.sourceFingerprint && sourceFingerprint(source.zero) && test.sourceFingerprint !== sourceFingerprint(source.zero)) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), reason: 'The authoritative A.4.2.3 result was corrected.', previousSourceFingerprint: test.sourceFingerprint }]; await test.save(); return res.status(409).json({ message: 'A.4.2.3 changed. Revalidate the Tare test before continuing.', code: 'REVALIDATION_REQUIRED' }); } const e = Number(snapshot.e); const max = Number(snapshot.max);
     if (phaseCode === 'A.4.6.1') {
-      if (req.body.observation) {
-        const body = z.object({ tareValue: z.number().finite().nonnegative(), grossLoad: z.number().finite().nonnegative(), indicationI: z.number().finite(), deltaL: z.number().finite().nonnegative(), direction: z.enum(['INCREASING', 'DECREASING']), notes: z.string().optional().default('') }).parse(req.body.observation);
-        const tareValue = convertMass(body.tareValue, unit, instrumentUnit); const grossLoad = convertMass(body.grossLoad, unit, instrumentUnit); const indicationI = convertMass(body.indicationI, unit, instrumentUnit); const deltaL = convertMass(body.deltaL, unit, instrumentUnit); if (grossLoad > max) return res.status(400).json({ message: 'Gross load must not exceed the verified instrument Max.' }); const netLoad = calculateNetLoad(grossLoad, tareValue); if (netLoad > max) return res.status(400).json({ message: 'Net load must not exceed the verified instrument Max.' }); const mpe = getMpe(snapshot.accuracyClass, netLoad, e, { min: Number(snapshot.min), max, unit: instrumentUnit, rangeType: 'single-range', loadType: 'NET' }); if (!mpe.supported) return res.status(400).json({ message: mpe.reason }); const calculation = calculateChangeoverError(netLoad, indicationI, deltaL, e, source.value); const complianceResult = evaluateCompliance(calculation.correctedErrorEc, mpe.mpeValue);
-        phase.observations.push({ sequence: phase.observations.length + 1, unit, inputTareValue: body.tareValue, inputGrossLoad: body.grossLoad, inputIndicationI: body.indicationI, inputDeltaL: body.deltaL, tareValue, grossLoad, netLoad, indicationI, deltaL, direction: body.direction, trueIndicationP: calculation.trueIndicationP, rawErrorE: calculation.rawErrorE, correctedErrorEc: calculation.correctedErrorEc, accuracyClass: mpe.accuracyClass, e: mpe.e, m: mpe.m, mpeMultiplier: mpe.mpeMultiplier, mpeValue: mpe.mpeValue, mpeUnit: mpe.mpeUnit, ruleSetId: mpe.ruleSetId, ruleReference: mpe.ruleReference, ruleVersion: mpe.ruleVersion, complianceResult, result: complianceResult, notes: body.notes, recordedAt: new Date() }); tareEvent(test, 'TARE_LOAD_OBSERVATION_RECORDED', req.user, { sequence: phase.observations.length });
+      if (req.body.observation === undefined || req.body.observation === null) return res.status(400).json({ message: 'Provide tare value used, gross load, indication I, and ΔL before recording an observation.', code: 'INCOMPLETE_OBSERVATION' });
+      {
+        const validated = validateTareLoadObservation(req.body.observation); if (!validated.valid) return res.status(400).json({ message: Object.values(validated.errors).join(' '), code: 'INCOMPLETE_OBSERVATION', fields: validated.errors }); const body = validated.value;
+        const tareValue = convertMass(body.tareValue, unit, instrumentUnit); const grossLoad = convertMass(body.grossLoad, unit, instrumentUnit); const indicationI = convertMass(body.indicationI, unit, instrumentUnit); const deltaL = convertMass(body.deltaL, unit, instrumentUnit); if (grossLoad > max) return res.status(400).json({ message: 'Gross load must not exceed the verified instrument Max.' }); if (tareValue > grossLoad) return res.status(400).json({ message: 'Tare value cannot exceed gross load.' }); const configuredMaximumTare = Number((test.tareConfigurationSnapshot as any)?.maximumTareEffect?.value); if ((test.tareConfigurationSnapshot as any)?.tareType === 'SUBTRACTIVE' && Number.isFinite(configuredMaximumTare) && (tareValue < configuredMaximumTare / 3 || tareValue > (2 * configuredMaximumTare) / 3)) return res.status(400).json({ message: `For subtractive tare, the tare value used must be between ${configuredMaximumTare / 3} and ${(2 * configuredMaximumTare) / 3} ${instrumentUnit}.` }); const netLoad = calculateNetLoad(grossLoad, tareValue); if (netLoad > max) return res.status(400).json({ message: 'Net load must not exceed the verified instrument Max.' }); const mpe = getMpe(snapshot.accuracyClass, netLoad, e, { min: Number(snapshot.min), max, unit: instrumentUnit, rangeType: 'single-range', loadType: 'NET' }); if (!mpe.supported) return res.status(400).json({ message: mpe.reason }); const calculation = calculateChangeoverError(netLoad, indicationI, deltaL, e, source.value); const complianceResult = evaluateCompliance(calculation.correctedErrorEc, mpe.mpeValue);
+        phase.observations.push({ observationId: crypto.randomUUID(), sequence: phase.observations.length + 1, unit, inputTareValue: body.tareValue, inputGrossLoad: body.grossLoad, inputIndicationI: body.indicationI, inputDeltaL: body.deltaL, tareValue, grossLoad, netLoad, indicationI, deltaL, direction: body.direction, trueIndicationP: calculation.trueIndicationP, rawErrorE: calculation.rawErrorE, correctedErrorEc: calculation.correctedErrorEc, accuracyClass: mpe.accuracyClass, e: mpe.e, m: mpe.m, mpeMultiplier: mpe.mpeMultiplier, mpeValue: mpe.mpeValue, mpeUnit: mpe.mpeUnit, ruleSetId: mpe.ruleSetId, ruleReference: mpe.ruleReference, ruleVersion: mpe.ruleVersion, complianceResult, result: complianceResult, notes: body.notes, recordedAt: new Date() });
+        phase.status = 'IN_PROGRESS';
+        tareEvent(test, 'TARE_LOAD_OBSERVATION_RECORDED', req.user, { sequence: phase.observations.length });
       }
-      if (req.body.complete === true) { if (phase.observations.length < 5) return res.status(400).json({ message: 'Record at least five actual tare load observations before completing A.4.6.1.' }); phase.result = phase.observations.some((item: any) => item.complianceResult === 'FAIL') ? 'FAIL' : 'PASS'; finishTarePhase(test, phase); }
+      if (req.body.complete === true) {
+        const completion = evaluateTareCompletion({ observations: phase.observations, recommendedCount: test.loadPlan?.length || 0, min: Number(snapshot.min), max, e, accuracyClass: String(snapshot.accuracyClass || ''), tareType: test.tareConfigurationSnapshot?.tareType, maximumTareEffect: Number(test.tareConfigurationSnapshot?.maximumTareEffect?.value), representativeTare: Number(test.loadPlan?.[0]?.representativeTare), unit: instrumentUnit });
+        if (!completion.complete) return res.status(400).json({ message: completion.reason, code: completion.coverageComplete ? 'INCOMPLETE_OBSERVATIONS' : 'INCOMPLETE_COVERAGE', completion });
+        phase.result = phase.observations.some((item: any) => item.complianceResult === 'FAIL') ? 'FAIL' : 'PASS'; finishTarePhase(test, phase);
+      }
     } else if (phaseCode === 'A.4.6.2') {
-      const body = z.object({ loadL: z.number().finite().nonnegative(), indicationI: z.number().finite(), deltaL: z.number().finite().nonnegative(), notes: z.string().optional().default('') }).parse(req.body.observation || req.body); const loadL = convertMass(body.loadL, unit, instrumentUnit); const indicationI = convertMass(body.indicationI, unit, instrumentUnit); const deltaL = convertMass(body.deltaL, unit, instrumentUnit); if (loadL > max) return res.status(400).json({ message: 'Load must not exceed the verified instrument Max.' }); const calculation = calculateChangeoverError(loadL, indicationI, deltaL, e, source.value); const accuracy = tareSettingAccuracyResult(calculation.correctedErrorEc, e); phase.observations = [{ unit, inputLoadL: body.loadL, inputIndicationI: body.indicationI, inputDeltaL: body.deltaL, loadL, indicationI, deltaL, recordedAt: new Date() }]; phase.calculations = { ...calculation, calculatedE0: source.value, tareSettingError: accuracy.tareSettingError, accuracyLimit: accuracy.accuracyLimit, result: accuracy.result, sourcePhase: 'A.4.2.3' }; phase.result = accuracy.result; phase.notes = body.notes; if (req.body.complete !== false) finishTarePhase(test, phase); tareEvent(test, 'TARE_SETTING_ACCURACY_RECORDED', req.user, { result: accuracy.result });
-    } else return res.status(409).json({ message: 'The separate tare-weighing-device module is not available in this implementation.', code: 'PROCEDURE_MODULE_REQUIRED' });
-    await test.save(); if (test.status === 'COMPLETED') { report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); } res.json({ report, test: publicTare(test), phase });
+      if (!tareSettingPhaseIsMutable(test.status, phase.status)) return res.status(409).json({ message: 'Completed A.4.6.2 observations are locked and cannot be modified.', code: 'WORKFLOW_LOCKED' });
+      const procedure = deriveTareSettingProcedureFromSnapshots({ reportInstrument: report.instrument || {}, instrumentSnapshot: test.instrumentSnapshot || {} });
+      if (tareSettingObservationLimitReached(phase.observations, procedure.repetitions)) return res.status(409).json({ message: `A.4.6.2 already has the required ${procedure.repetitions} valid repetitions. Edit or delete an existing repetition before recording a replacement.`, code: 'REPETITION_LIMIT_REACHED', completion: evaluateTareSettingCompletion(phase.observations, procedure.repetitions) });
+      const prepared = prepareTareSettingObservation(report, test, req.body, phase.observations.length + 1);
+      phase.observations.push(prepared.observation);
+      phase.status = 'IN_PROGRESS';
+      phase.calculations = { procedure: prepared.procedure, lastErrorE0: prepared.observation.errorE0, accuracyLimit: prepared.observation.accuracyLimit, result: prepared.observation.result, sourcePhase: 'A.4.2.3' };
+      if (req.body.complete === true) {
+        const completion = evaluateTareSettingCompletion(phase.observations, prepared.procedure.repetitions);
+        if (!completion.complete) return res.status(400).json({ message: completion.reason, code: 'INCOMPLETE_REPETITIONS', completion });
+        phase.result = completion.result;
+        phase.calculations = { ...phase.calculations, completion };
+        finishTarePhase(test, phase);
+      }
+      a461Phase.status = 'LOCKED';
+      a461Phase.workflowNote = 'A.4.6.1 is locked while A.4.6.2 is being executed to preserve the recorded verification result. This is an application workflow control, not an OIML requirement.';
+      tareEvent(test, 'TARE_SETTING_ACCURACY_RECORDED', req.user, { observationId: prepared.observation.observationId, sequence: phase.observations.length, result: prepared.observation.result });
+    } else if (phaseCode === 'A.4.6.3') {
+      if (phase.status === 'COMPLETED' && phase.observations?.length === 0 && a463AfterCompletedA462) phase.status = 'AVAILABLE';
+      if (phase.status === 'COMPLETED') return res.status(409).json({ message: 'Completed A.4.6.3 observations are locked and cannot be modified.', code: 'WORKFLOW_LOCKED' });
+      test.status = 'IN_PROGRESS'; test.result = 'NOT_DETERMINED'; test.completedAt = undefined;
+      if (req.body.complete === true && req.body.observation === undefined) {
+        const summary = recalculateTareDevicePhase(phase);
+        if (!tareDeviceCompletionAllowed(phase.observations) || summary.validObservationCount !== 1) return res.status(400).json({ message: 'Record exactly one valid A.4.6.3 comparison observation before completing the test.', code: 'INCOMPLETE_OBSERVATIONS' });
+        finishTarePhase(test, phase);
+        tareEvent(test, 'TARE_DEVICE_COMPARISON_COMPLETED', req.user, { result: phase.result });
+      } else {
+        if (req.body.complete === true) return res.status(400).json({ message: 'Save the A.4.6.3 observation first, then use Record & complete as a separate action.', code: 'SEPARATE_COMPLETION_REQUIRED' });
+        if (tareDeviceObservationLimitReached(phase.observations)) return res.status(409).json({ message: 'A.4.6.3 accepts one comparison observation. Edit or delete the existing observation before recording a replacement.', code: 'OBSERVATION_LIMIT_REACHED' });
+      const prepared = prepareTareDeviceObservation(report, test, req.body, phase.observations.length + 1);
+      phase.observations.push(prepared);
+      phase.status = 'IN_PROGRESS';
+      const summary = recalculateTareDevicePhase(phase);
+      tareEvent(test, 'TARE_DEVICE_COMPARISON_RECORDED', req.user, { observationId: prepared.observationId, sequence: phase.observations.length, result: prepared.result });
+      }
+    }
+    await test.save(); if (test.status === 'COMPLETED') { report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); } res.json({ report, test: publicTare(test, report.instrument), phase });
+  } catch (e) { next(e); }
+});
+
+const tareSettingMutationContext = async (req: any) => {
+  const report = await getOwnedReport(req);
+  if (!report) throw Object.assign(new Error('Test report not found.'), { status: 404 });
+  const test: any = await TareTest.findOne({ reportId: report._id });
+  if (!test) throw Object.assign(new Error('Start the Tare test first.'), { status: 409 });
+  const phase: any = test.phases.find((item: any) => item.code === 'A.4.6.2');
+  if (!phase || phase.applicability !== 'APPLICABLE') throw Object.assign(new Error(phase?.reason || 'A.4.6.2 is not applicable.'), { status: 409 });
+  if (!tareSettingPhaseIsMutable(test.status, phase.status)) throw Object.assign(new Error('Completed A.4.6.2 observations are locked and cannot be modified.'), { status: 409, code: 'WORKFLOW_LOCKED' });
+  const integrity = await tareState(report);
+  if (test.status === 'REVALIDATION_REQUIRED' || integrity.stale) throw Object.assign(new Error('The A.4.2 source evidence or tare configuration changed. Revalidate A.4.6 before continuing.'), { status: 409, code: 'REVALIDATION_REQUIRED' });
+  return { report, test, phase };
+};
+
+r.patch('/:id/tare/phases/A.4.6.2/observations/:observationId', async (req: any, res, next) => {
+  try {
+    const { report, test, phase } = await tareSettingMutationContext(req);
+    const requestedId = decodeURIComponent(String(req.params.observationId));
+    const index = (phase.observations || []).findIndex((item: any) => tareObservationIdentity(item) === requestedId);
+    if (index < 0) return res.status(404).json({ message: 'A.4.6.2 observation not found.' });
+    const currentObservation = phase.observations[index];
+    const previous = currentObservation?._doc ? { ...currentObservation._doc } : typeof currentObservation?.toObject === 'function' ? currentObservation.toObject() : { ...currentObservation };
+    const prepared = prepareTareSettingObservation(report, test, req.body, Number(previous.sequence) || index + 1);
+    const replacement: any = { ...prepared.observation, observationId: requestedId, sequence: previous.sequence };
+    const replacementSubdocument = typeof phase.observations.create === 'function'
+      ? phase.observations.create(replacement)
+      : replacement;
+    phase.observations.splice(index, 1, replacementSubdocument);
+    test.markModified('phases');
+    const completion = updateTareSettingSummary(test, phase, prepared.procedure);
+    test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode: 'A.4.6.2', action: 'EDIT_OBSERVATION', observationId: requestedId, previousObservation: previous }];
+    tareEvent(test, 'TARE_SETTING_ACCURACY_OBSERVATION_EDITED', req.user, { observationId: requestedId, result: replacement.result });
+    await test.save();
+    res.json({ report, test: publicTare(test, report.instrument), phase, completion });
+  } catch (e) { next(e); }
+});
+
+r.delete('/:id/tare/phases/A.4.6.2/observations/:observationId', async (req: any, res, next) => {
+  try {
+    const { report, test, phase } = await tareSettingMutationContext(req);
+    const requestedId = decodeURIComponent(String(req.params.observationId));
+    const index = (phase.observations || []).findIndex((item: any) => tareObservationIdentity(item) === requestedId);
+    if (index < 0) return res.status(404).json({ message: 'A.4.6.2 observation not found.' });
+    const [removed] = phase.observations.splice(index, 1);
+    const procedure = deriveTareSettingProcedureFromSnapshots({ reportInstrument: report.instrument || {}, instrumentSnapshot: test.instrumentSnapshot || {} });
+    const completion = updateTareSettingSummary(test, phase, procedure);
+    test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode: 'A.4.6.2', action: 'DELETE_OBSERVATION', observationId: requestedId, previousObservation: removed }];
+    tareEvent(test, 'TARE_SETTING_ACCURACY_OBSERVATION_DELETED', req.user, { observationId: requestedId, remainingObservations: phase.observations.length });
+    await test.save();
+    res.json({ report, test: publicTare(test, report.instrument), phase, completion });
+  } catch (e) { next(e); }
+});
+
+const tareDeviceMutationContext = async (req: any) => {
+  const report = await getOwnedReport(req);
+  if (!report) throw Object.assign(new Error('Test report not found.'), { status: 404 });
+  const test: any = await TareTest.findOne({ reportId: report._id });
+  if (!test) throw Object.assign(new Error('Start the Tare test first.'), { status: 409 });
+  const phase: any = test.phases.find((item: any) => item.code === 'A.4.6.3');
+  if (!phase || phase.applicability !== 'APPLICABLE') throw Object.assign(new Error(phase?.reason || 'A.4.6.3 is not applicable.'), { status: 409 });
+  // The phase is the authoritative lock boundary. A legacy aggregate test
+  // status can remain COMPLETED after A.4.6.2 while A.4.6.3 is still AVAILABLE;
+  // that stale aggregate must not prevent the applicable phase from starting.
+  if (phase.status === 'COMPLETED') throw Object.assign(new Error('Completed A.4.6.3 observations are locked and cannot be modified.'), { status: 409, code: 'WORKFLOW_LOCKED' });
+  const integrity = await tareState(report);
+  if (test.status === 'REVALIDATION_REQUIRED' || integrity.stale) throw Object.assign(new Error('The A.4.2 source evidence or tare configuration changed. Revalidate A.4.6 before continuing.'), { status: 409, code: 'REVALIDATION_REQUIRED' });
+  return { report, test, phase };
+};
+
+r.patch('/:id/tare/phases/A.4.6.3/observations/:observationId', async (req: any, res, next) => {
+  try {
+    const { report, test, phase } = await tareDeviceMutationContext(req);
+    const requestedId = decodeURIComponent(String(req.params.observationId));
+    const index = (phase.observations || []).findIndex((item: any) => tareObservationIdentity(item) === requestedId);
+    if (index < 0) return res.status(404).json({ message: 'A.4.6.3 observation not found.' });
+    const current = phase.observations[index];
+    const previous = current?._doc ? { ...current._doc } : typeof current?.toObject === 'function' ? current.toObject() : { ...current };
+    const replacement: any = { ...prepareTareDeviceObservation(report, test, req.body, Number(previous.sequence) || index + 1), observationId: requestedId, sequence: previous.sequence };
+    const subdocument = typeof phase.observations.create === 'function' ? phase.observations.create(replacement) : replacement;
+    phase.observations.splice(index, 1, subdocument);
+    recalculateTareDevicePhase(phase);
+    phase.status = 'IN_PROGRESS';
+    test.status = 'IN_PROGRESS'; test.result = 'NOT_DETERMINED'; test.completedAt = undefined;
+    test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode: 'A.4.6.3', action: 'EDIT_OBSERVATION', observationId: requestedId, previousObservation: previous }];
+    tareEvent(test, 'TARE_DEVICE_COMPARISON_EDITED', req.user, { observationId: requestedId, result: replacement.result });
+    test.markModified('phases'); test.markModified('revisionHistory'); await test.save();
+    res.json({ report, test: publicTare(test, report.instrument), phase });
+  } catch (e) { next(e); }
+});
+
+r.delete('/:id/tare/phases/A.4.6.3/observations/:observationId', async (req: any, res, next) => {
+  try {
+    const { report, test, phase } = await tareDeviceMutationContext(req);
+    const requestedId = decodeURIComponent(String(req.params.observationId));
+    const index = (phase.observations || []).findIndex((item: any) => tareObservationIdentity(item) === requestedId);
+    if (index < 0) return res.status(404).json({ message: 'A.4.6.3 observation not found.' });
+    const [removed] = phase.observations.splice(index, 1);
+    recalculateTareDevicePhase(phase);
+    phase.status = 'IN_PROGRESS';
+    test.status = 'IN_PROGRESS'; test.result = 'NOT_DETERMINED'; test.completedAt = undefined;
+    test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode: 'A.4.6.3', action: 'DELETE_OBSERVATION', observationId: requestedId, previousObservation: removed }];
+    tareEvent(test, 'TARE_DEVICE_COMPARISON_DELETED', req.user, { observationId: requestedId, remainingObservations: phase.observations.length });
+    test.markModified('phases'); test.markModified('revisionHistory'); await test.save();
+    res.json({ report, test: publicTare(test, report.instrument), phase });
+  } catch (e) { next(e); }
+});
+
+const tareLoadMutationContext = async (req: any) => {
+  const report = await getOwnedReport(req);
+  if (!report) throw Object.assign(new Error('Test report not found.'), { status: 404 });
+  const test: any = await TareTest.findOne({ reportId: report._id });
+  if (!test) throw Object.assign(new Error('Start the Tare test first.'), { status: 409 });
+  const phase: any = test.phases.find((item: any) => item.code === 'A.4.6.1');
+  if (!phase || phase.applicability !== 'APPLICABLE') throw Object.assign(new Error(phase?.reason || 'A.4.6.1 is not applicable.'), { status: 409 });
+  const a462: any = test.phases.find((item: any) => item.code === 'A.4.6.2');
+  if (phase.status === 'LOCKED' || tareSettingExecutionHasBegun(a462)) throw Object.assign(new Error('A.4.6.1 is locked while A.4.6.2 is being executed.'), { status: 409, code: 'WORKFLOW_LOCKED' });
+  const integrity = await tareState(report);
+  if (test.status === 'REVALIDATION_REQUIRED' || integrity.stale) throw Object.assign(new Error('The A.4.2 source evidence or tare configuration changed. Revalidate A.4.6 before continuing.'), { status: 409, code: 'REVALIDATION_REQUIRED' });
+  return { report, test, phase };
+};
+
+r.patch('/:id/tare/phases/A.4.6.1/observations/:observationId', async (req: any, res, next) => {
+  try {
+    const { report, test, phase } = await tareLoadMutationContext(req);
+    const requestedId = decodeURIComponent(String(req.params.observationId));
+    const index = (phase.observations || []).findIndex((item: any) => tareObservationIdentity(item) === requestedId);
+    if (index < 0) return res.status(404).json({ message: 'A.4.6.1 observation not found.' });
+    const current = phase.observations[index];
+    const previous = current?._doc ? { ...current._doc } : typeof current?.toObject === 'function' ? current.toObject() : { ...current };
+    const snapshot: any = { ...(report.instrument || {}), ...(test.instrumentSnapshot || {}) };
+    const replacement: any = await prepareTareLoadObservation(report, test, req.body, Number(previous.sequence) || index + 1);
+    replacement.observationId = requestedId;
+    replacement.sequence = previous.sequence;
+    const subdocument = typeof phase.observations.create === 'function' ? phase.observations.create(replacement) : replacement;
+    phase.observations.splice(index, 1, subdocument);
+    test.markModified('phases');
+    const completion = recalculateTareLoadPhase(test, phase, snapshot);
+    test.status = 'IN_PROGRESS';
+    test.result = 'NOT_DETERMINED';
+    test.completedAt = undefined;
+    test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode: 'A.4.6.1', action: 'EDIT_OBSERVATION', observationId: requestedId, previousObservation: previous }];
+    tareEvent(test, 'TARE_LOAD_OBSERVATION_EDITED', req.user, { observationId: requestedId, result: replacement.complianceResult });
+    await test.save();
+    res.json({ report, test: publicTare(test, report.instrument), phase, completion });
+  } catch (e) { next(e); }
+});
+
+r.delete('/:id/tare/phases/A.4.6.1/observations/:observationId', async (req: any, res, next) => {
+  try {
+    const { report, test, phase } = await tareLoadMutationContext(req);
+    const requestedId = decodeURIComponent(String(req.params.observationId));
+    const index = (phase.observations || []).findIndex((item: any) => tareObservationIdentity(item) === requestedId);
+    if (index < 0) return res.status(404).json({ message: 'A.4.6.1 observation not found.' });
+    const [removed] = phase.observations.splice(index, 1);
+    const snapshot: any = { ...(report.instrument || {}), ...(test.instrumentSnapshot || {}) };
+    test.markModified('phases');
+    const completion = recalculateTareLoadPhase(test, phase, snapshot);
+    test.status = 'IN_PROGRESS';
+    test.result = 'NOT_DETERMINED';
+    test.completedAt = undefined;
+    test.revisionHistory = [...(test.revisionHistory || []), { changedAt: new Date(), phaseCode: 'A.4.6.1', action: 'DELETE_OBSERVATION', observationId: requestedId, previousObservation: removed }];
+    tareEvent(test, 'TARE_LOAD_OBSERVATION_DELETED', req.user, { observationId: requestedId, remainingObservations: phase.observations.length });
+    await test.save();
+    res.json({ report, test: publicTare(test, report.instrument), phase, completion });
   } catch (e) { next(e); }
 });
 
@@ -569,19 +964,23 @@ const discriminationPrerequisitesComplete = async (report: any, route: any) => {
 
 const eccentricityPrerequisitesComplete = async (report: any, route: any) => {
   const prerequisiteTests = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.order < (route.tests.find((candidate: any) => candidate.code === 'A.4.7')?.order || 0));
-  const [zeroChecking, zeroSettingBeforeLoading, performance, tare] = await Promise.all([
+  const [zeroChecking, zeroSettingBeforeLoading, performance, multipleIndicating, tare] = await Promise.all([
     ZeroCheckingTest.findOne({ reportId: report._id }),
     ZeroSettingBeforeLoadingTest.findOne({ reportId: report._id }),
     WeighingPerformanceTest.findOne({ reportId: report._id }),
+    MultipleIndicatingDeviceTest.findOne({ reportId: report._id }),
     TareTest.findOne({ reportId: report._id }),
   ]);
-  const completed: Record<string, boolean> = {
-    'A.4.2': zeroChecking?.status === 'COMPLETED',
-    'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED',
-    'A.4.4': performance?.status === 'COMPLETED',
-    'A.4.6': tare?.status === 'COMPLETED',
+  const applicableTarePhases = (tare?.phases || []).filter((phase: any) => phase.applicability === 'APPLICABLE');
+  const tareChildPhasesComplete = applicableTarePhases.length > 0 && applicableTarePhases.every((phase: any) => ['COMPLETED', 'LOCKED'].includes(String(phase.status)));
+  const completed: Record<string, any> = {
+    'A.4.2': { status: zeroChecking?.status },
+    'A.4.3': { status: zeroSettingBeforeLoading?.status },
+    'A.4.4': { status: performance?.status },
+    'A.4.5': { status: multipleIndicating?.status, result: multipleIndicating?.result },
+    'A.4.6': { status: tare?.status, result: tare?.result, applicablePhasesComplete: tareChildPhasesComplete },
   };
-  return prerequisiteTests.every((item: any) => completed[item.code] === true);
+  return { complete: missingRoutePrerequisites(prerequisiteTests, completed).length === 0, missing: missingRoutePrerequisites(prerequisiteTests, completed) };
 };
 
 const eccentricityEvent = (test: any, action: string, user: any, metadata: any = {}) => {
@@ -610,7 +1009,8 @@ r.post('/:id/eccentricity/start', async (req: any, res, next) => {
     const state = await eccentricityState(report);
     if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.7 requires instrument configuration.', code: 'CONFIGURATION_REQUIRED' });
     if (state.applicability.executionSupported !== true || state.applicability.method !== 'A.4.7.1') return res.status(409).json({ message: 'The applicable A.4.7 method is identified, but its execution module is not implemented for this configuration.', code: 'PROCEDURE_MODULE_REQUIRED' });
-    if (!(await eccentricityPrerequisitesComplete(report, state.route))) return res.status(409).json({ message: 'Complete the preceding applicable tests before starting Eccentricity.', code: 'DEPENDENCY_REQUIRED' });
+    const prerequisiteState = await eccentricityPrerequisitesComplete(report, state.route);
+    if (!prerequisiteState.complete) return res.status(409).json({ message: `Complete ${prerequisiteState.missing.map((item: any) => item.code).join(', ')} before starting Eccentricity.`, code: 'DEPENDENCY_REQUIRED', missingPrerequisites: prerequisiteState.missing });
     if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Eccentricity test before continuing.', code: 'REVALIDATION_REQUIRED' });
     let test: any = state.test;
     if (!test) {
@@ -890,7 +1290,7 @@ r.post('/:id/repeatability/start', async (req: any, res, next) => {
         if (!mpe.supported) throw Object.assign(new Error(mpe.reason), { status: 409 });
         return { ...item, targetLoad: { value: item.targetLoad, unit }, status: item.seriesId === 'SERIES_1' ? 'AVAILABLE' : 'LOCKED', result: 'NOT_DETERMINED', observations: [], summary: { targetMpe: { value: mpe.mpeValue, unit }, targetMpeRule: mpe.ruleReference } };
       });
-      test = new RepeatabilityTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: REPEATABILITY_TEST_VERSION, engineVersion: plan.engineVersion, ruleSetId: state.route.ruleSetId, source: REPEATABILITY_SOURCE, controlStage, method: 'SAME_LOAD_REPEAT_WEIGHINGS', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, zeroReferenceE0: e0, procedureConfirmation: { automaticZeroOnConfirmed: false, unloadedInstrumentRestConfirmed: false }, series, startedAt: new Date(), events: [{ action: 'REPEATABILITY_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { controlStage, applicableRule: REPEATABILITY_RULE_REFERENCE } }] });
+      test = new RepeatabilityTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: REPEATABILITY_TEST_VERSION, engineVersion: plan.engineVersion, ruleSetId: state.route.ruleSetId, source: REPEATABILITY_SOURCE, controlStage, method: 'SAME_LOAD_REPEAT_WEIGHINGS', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, zeroReferenceE0: e0, observationUnit: unit, procedureConfirmation: { automaticZeroOnConfirmed: false, unloadedInstrumentRestConfirmed: false }, series, startedAt: new Date(), events: [{ action: 'REPEATABILITY_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { controlStage, applicableRule: REPEATABILITY_RULE_REFERENCE } }] });
       await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
     }
     res.status(201).json({ report, applicability: state.applicability, controlStage: test.controlStage, test: publicRepeatability(test) });
@@ -901,12 +1301,22 @@ r.patch('/:id/repeatability/procedure', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const test: any = await RepeatabilityTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start the Repeatability test first.' });
-    const body = z.object({ automaticZeroOnConfirmed: z.boolean(), unloadedInstrumentRestConfirmed: z.literal(true) }).parse(req.body);
-    const snapshot: any = test.instrumentSnapshot || {};
-    if ((snapshot.zeroSettingMethod === 'Automatic' || snapshot.zeroTracking === true) && body.automaticZeroOnConfirmed !== true) return res.status(400).json({ message: 'Confirm that automatic zero-setting / zero-tracking remained in operation during this test.' });
+    const body = z.object({ automaticZeroOnConfirmed: z.boolean(), unloadedInstrumentRestConfirmed: z.boolean() }).parse(req.body);
     test.procedureConfirmation = { ...((test.procedureConfirmation as any)?.toObject?.() || test.procedureConfirmation || {}), ...body, confirmedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
-    test.events.push({ action: 'REPEATABILITY_PROCEDURE_CONFIRMED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { automaticZeroRequired: snapshot.zeroSettingMethod === 'Automatic' || snapshot.zeroTracking === true } });
+    const snapshot: any = test.instrumentSnapshot || {};
+    test.events.push({ action: 'REPEATABILITY_PROCEDURE_CONFIRMED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { automaticZeroRequired: snapshot.zeroSettingMethod === 'Automatic' || snapshot.zeroTracking === true, confirmations: body } });
     test.markModified('procedureConfirmation'); await test.save(); res.json({ test: publicRepeatability(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/repeatability/unit', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await RepeatabilityTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start the Repeatability test first.' });
+    if (test.status === 'COMPLETED') return res.status(409).json({ message: 'Completed Repeatability tests are read-only.' });
+    const body = z.object({ unit: z.enum(['mg', 'g', 'kg', 't']) }).parse(req.body);
+    test.observationUnit = body.unit; test.markModified('observationUnit'); await test.save();
+    res.json({ test: publicRepeatability(test) });
   } catch (e) { next(e); }
 });
 
@@ -916,7 +1326,8 @@ r.patch('/:id/repeatability/series/:seriesId/observations/:repetition', async (r
     const state = await repeatabilityState(report); const test: any = state.test;
     if (!test) return res.status(409).json({ message: 'Start the Repeatability test first.' });
     if (state.stale || test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Repeatability test before continuing.', code: 'REVALIDATION_REQUIRED' });
-    if (!test.procedureConfirmation?.unloadedInstrumentRestConfirmed) return res.status(409).json({ message: 'Confirm the repeat-weighing procedure before recording observations.', code: 'PROCEDURE_CONFIRMATION_REQUIRED' });
+    const requiresAutomaticConfirmation = test.instrumentSnapshot?.zeroSettingMethod === 'Automatic' || test.instrumentSnapshot?.zeroTracking === true;
+    if (!procedureConfirmationReady({ automaticRequired: requiresAutomaticConfirmation, automaticZeroOnConfirmed: test.procedureConfirmation?.automaticZeroOnConfirmed, unloadedInstrumentRestConfirmed: test.procedureConfirmation?.unloadedInstrumentRestConfirmed })) return res.status(409).json({ message: 'Confirm all required repeat-weighing procedure conditions before recording observations.', code: 'PROCEDURE_CONFIRMATION_REQUIRED' });
     const series: any = test.series.find((item: any) => item.seriesId === String(req.params.seriesId)); if (!series) return res.status(404).json({ message: 'Repeatability series not found.' });
     const repetition = Number(req.params.repetition); if (!Number.isInteger(repetition) || repetition < 1 || repetition > Number(series.requiredRepetitions)) return res.status(400).json({ message: 'Invalid repetition number.' });
     const current = test.series.find((item: any) => item.status !== 'COMPLETED'); const existing = series.observations?.find((item: any) => item.repetition === repetition); const correcting = Boolean(existing);
@@ -928,6 +1339,7 @@ r.patch('/:id/repeatability/series/:seriesId/observations/:repetition', async (r
     const calculation = calculateRepeatabilityObservation({ actualLoad: body.actualLoad, actualLoadUnit: body.loadUnit, indication: body.indication, indicationUnit: body.indicationUnit, deltaL: body.deltaL, deltaLUnit: body.deltaLUnit, e0: Number(test.zeroReferenceE0 || 0), snapshot: { accuracyClass: instrument.accuracyClass, min: Number(instrument.min), max, e: Number(instrument.e), unit } });
     if (!calculation.supported) return res.status(400).json({ message: calculation.reason });
     if (correcting) test.revisionHistory.push({ changedAt: new Date(), seriesId: series.seriesId, repetition, previousObservation: existing, reason: 'Repeatability observation corrected.' });
+    test.observationUnit = body.loadUnit;
     const observation = { repetition, unit: body.loadUnit, inputActualLoad: body.actualLoad, actualLoad: calculation.loadL, inputIndication: body.indication, indication: calculation.indicationI, inputDeltaL: body.deltaL, deltaL: calculation.deltaL, e0: calculation.e0, trueIndicationP: calculation.trueIndicationP, rawErrorE: calculation.rawErrorE, correctedErrorEc: calculation.correctedErrorEc, individualResult: calculation.individualResult, individualResultError: calculation.individualResultError, individualResultStatus: calculation.individualResultStatus, mpeValue: calculation.mpeValue, mpeUnit: calculation.mpeUnit, m: calculation.m, mpeMultiplier: calculation.mpeMultiplier, ruleSetId: calculation.ruleSetId, ruleReference: calculation.ruleReference, ruleVersion: calculation.ruleVersion, unloadedInstrumentAtRest: body.unloadedInstrumentAtRest, zeroResetPerformed: body.zeroResetPerformed, notes: body.notes, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
     series.observations = [...(series.observations || []).filter((item: any) => item.repetition !== repetition), observation].sort((a: any, b: any) => a.repetition - b.repetition);
     series.status = body.complete ? 'IN_PROGRESS' : 'IN_PROGRESS'; series.result = 'INCOMPLETE';
@@ -948,6 +1360,21 @@ const publicVariationWithTime = (test: any) => {
   const value: any = test?.toObject ? test.toObject() : test ? { ...test } : null;
   if (!value) return null;
   delete value._id; delete value.reportId; delete value.testerId;
+  value.plan = { ...(value.plan || {}), creepCheckpoints: CREEP_CHECKPOINTS };
+  if (value.creep) {
+    const checkpoints = Array.isArray(value.creep.checkpoints) ? value.creep.checkpoints : [];
+    const byCode = (code: string) => checkpoints.find((item: any) => item.checkpoint === code);
+    const snapshot = value.instrumentSnapshot || {};
+    const evaluated = evaluateCreep({
+      i0: Number(byCode('T0')?.indication), i5: Number(byCode('T5')?.indication), i15: Number(byCode('T15')?.indication), i30: Number(byCode('T30')?.indication), i240: Number(byCode('T240')?.indication),
+      deltaL0: Number(byCode('T0')?.deltaL), deltaL5: Number(byCode('T5')?.deltaL), deltaL15: Number(byCode('T15')?.deltaL), deltaL30: Number(byCode('T30')?.deltaL), deltaL240: Number(byCode('T240')?.deltaL),
+      p0: Number(byCode('T0')?.p), p5: Number(byCode('T5')?.p), p15: Number(byCode('T15')?.p), p30: Number(byCode('T30')?.p), p240: Number(byCode('T240')?.p),
+      e: Number(snapshot.e), mpeValue: Number(value.creep.observation?.mpeValue),
+      temperatures: checkpoints.map((item: any) => Number(item.temperature)).filter((item: number) => Number.isFinite(item)),
+    });
+    value.creep.observation = { ...(value.creep.observation || {}), ...evaluated };
+    value.creep.result = evaluated.result;
+  }
   return value;
 };
 
@@ -965,6 +1392,10 @@ const variationWithTimeState = async (report: any) => {
   return { route, applicability, test, fingerprint, stale };
 };
 
+const creepTemperatures = (test: any) => (test?.creep?.checkpoints || [])
+  .map((item: any) => Number(item.temperature))
+  .filter((value: number) => Number.isFinite(value));
+
 const variationWithTimePrerequisitesComplete = async (report: any, route: any) => {
   const target = route.tests.find((item: any) => item.code === 'A.4.11');
   const prerequisites = route.tests.filter((item: any) => item.status === 'APPLICABLE' && item.executionSupported !== false && item.order < (target?.order || 0));
@@ -973,11 +1404,6 @@ const variationWithTimePrerequisitesComplete = async (report: any, route: any) =
   ]);
   const completed: Record<string, boolean> = { 'A.4.2': zeroChecking?.status === 'COMPLETED', 'A.4.3': zeroSettingBeforeLoading?.status === 'COMPLETED', 'A.4.4': performance?.status === 'COMPLETED', 'A.4.5': multipleIndicating?.status === 'PASS' || multipleIndicating?.status === 'FAIL', 'A.4.6': tare?.status === 'COMPLETED', 'A.4.7': eccentricity?.status === 'COMPLETED', 'A.4.8': discrimination?.status === 'COMPLETED', 'A.4.9': sensitivity?.status === 'COMPLETED', 'A.4.10': repeatability?.status === 'COMPLETED' };
   return prerequisites.every((item: any) => completed[item.code] === true);
-};
-
-const environmentalTemperatures = (report: any, test: any) => {
-  const environment: any = report.environment || {};
-  return [environment.temperatureStart, ...(test.environmentalReadings || [])].filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value));
 };
 
 r.get('/:id/variation-with-time', async (req: any, res, next) => {
@@ -1001,10 +1427,21 @@ r.post('/:id/variation-with-time/start', async (req: any, res, next) => {
       const instrument: any = report.instrument || {}; const unit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
       const snapshot = { accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, unit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, rangeType: instrument.rangeType, intervalType: instrument.intervalType, zeroSettingMethod: instrument.zeroSettingMethod, zeroTracking: instrument.zeroTracking, indicationDamping: instrument.indicationDamping || 'NOT_SPECIFIED' };
       const plan = variationWithTimePlan(snapshot);
-      test = new VariationWithTimeTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: VARIATION_WITH_TIME_TEST_VERSION, engineVersion: VARIATION_WITH_TIME_ENGINE_VERSION, ruleSetId: state.route.ruleSetId, source: VARIATION_WITH_TIME_SOURCE, method: state.applicability.method, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, sourceFingerprint: state.fingerprint, plan, procedureConfirmation: { normalOscillationConfirmed: false }, environmentalReadings: [], creep: { status: 'AVAILABLE', result: 'NOT_DETERMINED', checkpoints: [] }, zeroReturn: { status: 'LOCKED', result: 'NOT_DETERMINED', checkpoints: [] }, startedAt: new Date(), events: [{ action: 'VARIATION_WITH_TIME_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { source: VARIATION_WITH_TIME_SOURCE } }] });
+      test = new VariationWithTimeTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: VARIATION_WITH_TIME_TEST_VERSION, engineVersion: VARIATION_WITH_TIME_ENGINE_VERSION, ruleSetId: state.route.ruleSetId, source: VARIATION_WITH_TIME_SOURCE, method: state.applicability.method, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: snapshot, observationUnit: unit, sourceFingerprint: state.fingerprint, plan, procedureConfirmation: { normalOscillationConfirmed: false }, environmentalReadings: [], creep: { status: 'AVAILABLE', result: 'NOT_DETERMINED', checkpoints: [] }, zeroReturn: { status: 'LOCKED', result: 'NOT_DETERMINED', checkpoints: [] }, startedAt: new Date(), events: [{ action: 'VARIATION_WITH_TIME_TEST_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { source: VARIATION_WITH_TIME_SOURCE } }] });
       await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save();
     }
     res.status(201).json({ report, applicability: state.applicability, test: publicVariationWithTime(test) });
+  } catch (e) { next(e); }
+});
+
+r.patch('/:id/variation-with-time/unit', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Variation of indication with time first.' });
+    if (test.status === 'COMPLETED') return res.status(409).json({ message: 'Completed Variation of indication with time data is read-only.' });
+    const body = z.object({ unit: z.enum(['mg', 'g', 'kg', 't']) }).parse(req.body);
+    test.observationUnit = body.unit; test.markModified('observationUnit'); await test.save();
+    res.json({ test: publicVariationWithTime(test) });
   } catch (e) { next(e); }
 });
 
@@ -1027,10 +1464,10 @@ r.patch('/:id/variation-with-time/creep/start', async (req: any, res, next) => {
     if (state.stale || test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'The instrument configuration changed. Revalidate Variation of indication with time before continuing.', code: 'REVALIDATION_REQUIRED' });
     if (!test.procedureConfirmation?.normalOscillationConfirmed) return res.status(409).json({ message: 'Confirm the creep procedure before starting the timer.', code: 'PROCEDURE_CONFIRMATION_REQUIRED' });
     if (test.creep?.status === 'IN_PROGRESS' || test.creep?.status === 'COMPLETED') return res.status(409).json({ message: 'The creep observation has already started.' });
-    const body = z.object({ actualLoad: z.number().finite().nonnegative(), actualLoadUnit: z.enum(['mg', 'g', 'kg', 't']), initialIndication: z.number().finite(), indicationUnit: z.enum(['mg', 'g', 'kg', 't']), temperatureStart: z.number().finite().optional(), notes: z.string().optional().default('') }).parse(req.body);
+    const body = z.object({ actualLoad: z.number().finite().nonnegative(), actualLoadUnit: z.enum(['mg', 'g', 'kg', 't']), initialIndication: z.number().finite(), indicationUnit: z.enum(['mg', 'g', 'kg', 't']), deltaL: z.number().finite().nonnegative(), deltaLUnit: z.enum(['mg', 'g', 'kg', 't']), temperatureStart: z.number().finite().optional(), notes: z.string().optional().default('') }).parse(req.body);
     const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const actualLoad = convertMass(body.actualLoad, body.actualLoadUnit, unit); if (actualLoad > Number(snapshot.max)) return res.status(400).json({ message: 'Actual load must not exceed Max.' });
-    const initialIndication = convertMass(body.initialIndication, body.indicationUnit, unit); const mpe = calculateVariationMpe(snapshot, actualLoad, unit); if (!mpe.supported) return res.status(400).json({ message: mpe.reason });
-    const now = new Date(); test.creep = { status: 'IN_PROGRESS', result: 'INCOMPLETE', startedAt: now, checkpoints: [{ checkpoint: 'T0', minutes: 0, indication: initialIndication, unit, temperature: body.temperatureStart, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user) }], observation: { actualLoad, inputActualLoad: body.actualLoad, unit: body.actualLoadUnit, indication: initialIndication, indicationUnit: body.indicationUnit, mpeValue: mpe.mpeValue, mpeUnit: mpe.mpeUnit, mpeRuleReference: mpe.ruleReference, mpeRuleSetId: mpe.ruleSetId, mpeRuleVersion: mpe.ruleVersion, sourceClause: VARIATION_WITH_TIME_SOURCE, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes } }; test.environmentalReadings = body.temperatureStart === undefined ? environmentalTemperatures(report, test) : [...environmentalTemperatures(report, test), body.temperatureStart];
+    const initialIndication = convertMass(body.initialIndication, body.indicationUnit, unit); const initialDeltaL = convertMass(body.deltaL, body.deltaLUnit, unit); const initialP = calculateCreepP(initialIndication, initialDeltaL, Number(snapshot.e)); const mpe = calculateVariationMpe(snapshot, actualLoad, unit); if (!mpe.supported) return res.status(400).json({ message: mpe.reason });
+     const now = new Date(); test.observationUnit = body.actualLoadUnit; test.creep = { status: 'IN_PROGRESS', result: 'INCOMPLETE', startedAt: now, checkpoints: [{ checkpoint: 'T0', minutes: 0, indication: initialIndication, unit, deltaL: initialDeltaL, p: initialP, temperature: body.temperatureStart, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user) }], observation: { actualLoad, inputActualLoad: body.actualLoad, unit: body.actualLoadUnit, indication: initialIndication, indicationUnit: body.indicationUnit, initialDeltaL, initialP, p0: initialP, mpeValue: mpe.mpeValue, mpeUnit: mpe.mpeUnit, mpeRuleReference: mpe.ruleReference, mpeRuleSetId: mpe.ruleSetId, mpeRuleVersion: mpe.ruleVersion, sourceClause: VARIATION_WITH_TIME_SOURCE, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes } }; test.environmentalReadings = body.temperatureStart === undefined ? [] : [body.temperatureStart];
     test.events.push({ action: 'VARIATION_WITH_TIME_CREEP_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { actualLoad, unit, mpe: mpe.mpeValue } });
     test.markModified('creep'); test.markModified('environmentalReadings'); await test.save(); res.json({ test: publicVariationWithTime(test) });
   } catch (e) { next(e); }
@@ -1040,22 +1477,42 @@ r.patch('/:id/variation-with-time/creep/checkpoint', async (req: any, res, next)
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test || test.creep?.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Start the creep observation first.' });
-    const body = z.object({ checkpoint: z.enum(['T15', 'T30', 'T60', 'T120', 'T180', 'T240']), indication: z.number().finite(), indicationUnit: z.enum(['mg', 'g', 'kg', 't']), temperature: z.number().finite().optional(), notes: z.string().optional().default('') }).parse(req.body);
-    const checkpoint = (test.plan?.creepCheckpoints || []).find((item: any) => item.checkpoint === body.checkpoint); if (!checkpoint) return res.status(400).json({ message: 'Checkpoint is not part of the A.4.11 plan.' });
-    if (test.creep.observation?.earlyTerminationAllowed === true) return res.status(409).json({ message: 'The 30-minute creep criteria were satisfied; no later checkpoint is required.', code: 'CREEP_EARLY_TERMINATION_ALLOWED' });
-    const existing = (test.creep.checkpoints || []).find((item: any) => item.checkpoint === body.checkpoint); if (existing) return res.status(409).json({ message: 'This checkpoint has already been recorded.' });
-    const ordered = ['T15', 'T30', 'T60', 'T120', 'T180', 'T240']; const previous = ordered.slice(0, ordered.indexOf(body.checkpoint)).find((code: string) => !(test.creep.checkpoints || []).some((item: any) => item.checkpoint === code)); if (previous) return res.status(409).json({ message: `Record ${previous} before ${body.checkpoint}.`, code: 'CHECKPOINT_ORDER_REQUIRED' });
+    const body = z.object({ checkpoint: z.enum(['T5', 'T15', 'T30', 'T60', 'T120', 'T180', 'T240']), indication: z.number().finite(), indicationUnit: z.enum(['mg', 'g', 'kg', 't']), deltaL: z.number().finite().nonnegative(), deltaLUnit: z.enum(['mg', 'g', 'kg', 't']), temperature: z.number().finite().optional(), notes: z.string().optional().default('') }).parse(req.body);
+     const checkpoint = CREEP_CHECKPOINTS.find((item: any) => item.checkpoint === body.checkpoint); if (!checkpoint) return res.status(400).json({ message: 'Checkpoint is not part of the A.4.11 plan.' });
+     const existing = (test.creep.checkpoints || []).find((item: any) => item.checkpoint === body.checkpoint); if (existing) return res.status(409).json({ message: 'This checkpoint has already been recorded.' });
+     const ordered = CREEP_CHECKPOINTS.slice(1).map(item => item.checkpoint); const nextExpected = ordered.find((code: string) => !(test.creep.checkpoints || []).some((item: any) => isValidCreepCheckpoint(item) && item.checkpoint === code)); if (body.checkpoint !== nextExpected) return res.status(409).json({ message: nextExpected ? `Record ${nextExpected} before ${body.checkpoint}.` : 'All checkpoints are already recorded.', code: 'CHECKPOINT_ORDER_REQUIRED' });
     const elapsed = Date.now() - new Date(test.creep.startedAt).getTime(); if (elapsed < Number(checkpoint.minutes) * 60 * 1000) return res.status(409).json({ message: `${body.checkpoint} is not yet available. Use the persisted timer.` , code: 'CHECKPOINT_NOT_DUE' });
-    const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const indication = convertMass(body.indication, body.indicationUnit, unit); const now = new Date(); test.creep.checkpoints.push({ checkpoint: body.checkpoint, minutes: checkpoint.minutes, indication, unit, temperature: body.temperature, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user) }); if (body.temperature !== undefined) test.environmentalReadings = [...(test.environmentalReadings || []), body.temperature];
-    const checkpoints: any[] = test.creep.checkpoints; const i0 = Number(checkpoints.find(item => item.checkpoint === 'T0')?.indication); const i15 = checkpoints.find(item => item.checkpoint === 'T15')?.indication; const i30 = checkpoints.find(item => item.checkpoint === 'T30')?.indication; const i240 = checkpoints.find(item => item.checkpoint === 'T240')?.indication; const evaluated = evaluateCreep({ i0, i15, i30, i240, e: Number(snapshot.e), mpeValue: Number(test.creep.observation?.mpeValue), temperatures: test.environmentalReadings || [] }); test.creep.observation = { ...((test.creep.observation as any)?.toObject?.() || test.creep.observation || {}), delta30: evaluated.delta30, delta15_30: evaluated.delta15_30, delta4h: evaluated.delta4h, temperatureVariation: evaluated.temperatureVariation, temperatureCondition: evaluated.temperatureCondition, extendedCriterion: evaluated.extendedCriterion, earlyTerminationAllowed: evaluated.earlyTerminationAllowed, result: evaluated.result, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes || test.creep.observation?.notes }; test.creep.result = evaluated.result; test.events.push({ action: 'VARIATION_WITH_TIME_CREEP_CHECKPOINT_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { checkpoint: body.checkpoint, result: evaluated.result } });
+    const snapshot: any = test.instrumentSnapshot; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const indication = convertMass(body.indication, body.indicationUnit, unit); const deltaL = convertMass(body.deltaL, body.deltaLUnit, unit); const p = calculateCreepP(indication, deltaL, Number(snapshot.e)); const now = new Date(); test.creep.checkpoints.push({ checkpoint: body.checkpoint, minutes: checkpoint.minutes, indication, unit, deltaL, p, temperature: body.temperature, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user) }); if (body.temperature !== undefined) test.environmentalReadings = [...(test.environmentalReadings || []), body.temperature];
+     const checkpoints: any[] = test.creep.checkpoints; const byCode = (code: string) => checkpoints.find(item => item.checkpoint === code); const evaluated = evaluateCreep({
+       i0: Number(byCode('T0')?.indication), i5: Number(byCode('T5')?.indication), i15: Number(byCode('T15')?.indication), i30: Number(byCode('T30')?.indication), i240: Number(byCode('T240')?.indication),
+       deltaL0: Number(byCode('T0')?.deltaL), deltaL5: Number(byCode('T5')?.deltaL), deltaL15: Number(byCode('T15')?.deltaL), deltaL30: Number(byCode('T30')?.deltaL), deltaL240: Number(byCode('T240')?.deltaL),
+       p0: Number(byCode('T0')?.p), p5: Number(byCode('T5')?.p), p15: Number(byCode('T15')?.p), p30: Number(byCode('T30')?.p), p240: Number(byCode('T240')?.p), e: Number(snapshot.e), mpeValue: Number(test.creep.observation?.mpeValue), temperatures: creepTemperatures(test),
+     });
+    test.creep.observation = { ...((test.creep.observation as any)?.toObject?.() || test.creep.observation || {}), ...evaluated, earlyTerminationAllowed: evaluated.earlyTerminationAllowed, result: evaluated.result, recordedAt: now, testerId: req.user._id, testerNameSnapshot: userName(req.user), notes: body.notes || test.creep.observation?.notes }; test.creep.result = evaluated.result; test.events.push({ action: 'VARIATION_WITH_TIME_CREEP_CHECKPOINT_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { checkpoint: body.checkpoint, result: evaluated.result } });
     test.markModified('creep'); test.markModified('environmentalReadings'); await test.save(); res.json({ test: publicVariationWithTime(test), checkpoint: body.checkpoint, evaluation: evaluated });
   } catch (e) { next(e); }
 });
 
 r.patch('/:id/variation-with-time/creep/complete', async (req: any, res, next) => {
   try {
-    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await VariationWithTimeTest.findOne({ reportId: report._id }); if (!test || test.creep?.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'The creep observation is not ready to complete.' });
-    const checkpoints: any[] = test.creep.checkpoints || []; const i0 = checkpoints.find(item => item.checkpoint === 'T0')?.indication; const i15 = checkpoints.find(item => item.checkpoint === 'T15')?.indication; const i30 = checkpoints.find(item => item.checkpoint === 'T30')?.indication; const i240 = checkpoints.find(item => item.checkpoint === 'T240')?.indication; const snapshot: any = test.instrumentSnapshot; const evaluation = evaluateCreep({ i0, i15, i30, i240, e: Number(snapshot.e), mpeValue: Number(test.creep.observation?.mpeValue), temperatures: test.environmentalReadings || [] }); if (!checkpoints.some(item => item.checkpoint === 'T15') || !checkpoints.some(item => item.checkpoint === 'T30')) return res.status(409).json({ message: 'Record T15 and T30 before completing the creep procedure.' }); if (evaluation.requiredCheckpoint === 'T240' && !checkpoints.some(item => item.checkpoint === 'T240')) return res.status(409).json({ message: 'The 30-minute criteria were not satisfied. Continue the observation through T240.' }); if (evaluation.temperatureCondition !== 'SATISFIED') return res.status(409).json({ message: 'Record at least two temperatures and keep temperature variation at or below 2 °C before completing creep.' }); if (evaluation.result === 'INCOMPLETE') return res.status(409).json({ message: 'Complete the required creep observations before continuing.' });
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await VariationWithTimeTest.findOne({ reportId: report._id });
+    if (!test || test.creep?.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'The creep observation is not ready to complete.' });
+    if (!test.procedureConfirmation?.normalOscillationConfirmed) return res.status(409).json({ message: 'Confirm the creep procedure before completing the test.', code: 'PROCEDURE_CONFIRMATION_REQUIRED' });
+    const checkpoints: any[] = test.creep.checkpoints || [];
+    const byCode = (code: string) => checkpoints.find(item => item.checkpoint === code);
+    const requiredEarlyCheckpoints = ['T5', 'T15', 'T30'];
+    const missing = requiredEarlyCheckpoints.filter(code => !isValidCreepCheckpoint(byCode(code)));
+    if (!isValidCreepCheckpoint(byCode('T0')) || missing.length) return res.status(409).json({ message: 'Record valid T0, T5, T15, and T30 observations before completing the creep procedure.', code: 'INCOMPLETE_CHECKPOINTS' });
+    const snapshot: any = test.instrumentSnapshot;
+    const evaluation = evaluateCreep({
+      i0: Number(byCode('T0')?.indication), i5: Number(byCode('T5')?.indication), i15: Number(byCode('T15')?.indication), i30: Number(byCode('T30')?.indication), i240: Number(byCode('T240')?.indication),
+      deltaL0: Number(byCode('T0')?.deltaL), deltaL5: Number(byCode('T5')?.deltaL), deltaL15: Number(byCode('T15')?.deltaL), deltaL30: Number(byCode('T30')?.deltaL), deltaL240: Number(byCode('T240')?.deltaL),
+      p0: Number(byCode('T0')?.p), p5: Number(byCode('T5')?.p), p15: Number(byCode('T15')?.p), p30: Number(byCode('T30')?.p), p240: Number(byCode('T240')?.p), e: Number(snapshot.e), mpeValue: Number(test.creep.observation?.mpeValue), temperatures: creepTemperatures(test),
+    });
+    if (evaluation.requiredCheckpoint === 'T240' && !isValidCreepCheckpoint(byCode('T240'))) return res.status(409).json({ message: 'The 30-minute criteria were not satisfied or temperature was not assessed. Continue the observation through T240.', code: 'FULL_DURATION_REQUIRED' });
+    if (evaluation.temperatureCondition !== 'SATISFIED') return res.status(409).json({ message: 'Record at least two creep temperatures and keep temperature variation at or below 2 °C before completing creep.', code: 'TEMPERATURE_ASSESSMENT_REQUIRED' });
+    if (evaluation.result === 'INCOMPLETE') return res.status(409).json({ message: 'Complete the required creep observations before continuing.', code: 'INCOMPLETE_CHECKPOINTS' });
     test.creep.status = 'COMPLETED'; test.creep.result = evaluation.result; test.creep.completedAt = new Date(); test.creep.observation = { ...((test.creep.observation as any)?.toObject?.() || test.creep.observation || {}), ...evaluation }; test.zeroReturn.status = 'AVAILABLE'; test.events.push({ action: 'VARIATION_WITH_TIME_CREEP_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluation.result, requiredCheckpoint: evaluation.requiredCheckpoint } }); test.markModified('creep'); test.markModified('zeroReturn'); await test.save(); res.json({ test: publicVariationWithTime(test) });
   } catch (e) { next(e); }
 });
@@ -1940,7 +2397,7 @@ r.get('/:id/review', async (req: any, res, next) => {
     if (state.multipleIndicating && ['PASS', 'FAIL'].includes(state.multipleIndicating.status)) state.pendingTests = state.pendingTests.filter((test: any) => test.code !== 'A.4.5');
     const attentionTests = state.attentionTests;
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;
-  res.json({ report: value, verification, zeroChecking: zeroChecking ? publicZeroChecking(zeroChecking) : null, zeroSettingBeforeLoading: zeroSettingBeforeLoading ? publicZeroSetting(zeroSettingBeforeLoading) : null, tare: tare ? publicTare(tare) : null, eccentricity: state.eccentricity ? publicEccentricity(state.eccentricity) : null, multipleIndicating: state.multipleIndicating ? publicMultipleIndicating(state.multipleIndicating) : null, discrimination: discrimination ? publicDiscrimination(discrimination) : null, sensitivity: sensitivity ? publicSensitivity(sensitivity) : null, repeatability: repeatability ? publicRepeatability(repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null, endurance: endurance ? publicEndurance(endurance) : null, performance: performance ? publicPerformance(performance) : null, applicability: state.route, pendingTests: state.pendingTests, attentionTests, readinessError: reviewReadiness(report, performance, state.pendingTests, attentionTests) });
+  res.json({ report: value, verification, zeroChecking: zeroChecking ? publicZeroChecking(zeroChecking) : null, zeroSettingBeforeLoading: zeroSettingBeforeLoading ? publicZeroSetting(zeroSettingBeforeLoading) : null, tare: tare ? publicTare(tare, report.instrument) : null, eccentricity: state.eccentricity ? publicEccentricity(state.eccentricity) : null, multipleIndicating: state.multipleIndicating ? publicMultipleIndicating(state.multipleIndicating) : null, discrimination: discrimination ? publicDiscrimination(discrimination) : null, sensitivity: sensitivity ? publicSensitivity(sensitivity) : null, repeatability: repeatability ? publicRepeatability(repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null, endurance: endurance ? publicEndurance(endurance) : null, performance: performance ? publicPerformance(performance) : null, applicability: state.route, pendingTests: state.pendingTests, attentionTests, readinessError: reviewReadiness(report, performance, state.pendingTests, attentionTests) });
   } catch (e) { next(e); }
 });
 
@@ -1951,8 +2408,15 @@ r.post('/:id/review/submit', async (req: any, res, next) => {
     const state = await applicableTestCompletion(report);
     const attentionTests = state.attentionTests;
     const readinessError = reviewReadiness(report, performance, state.pendingTests, attentionTests); if (readinessError) return res.status(409).json({ message: readinessError });
-    if (report.stage === 'FINAL_REPORT' && report.status === 'COMPLETED') return res.json({ report });
-    report.stage = 'FINAL_REPORT'; report.status = 'COMPLETED'; await report.save();
+    const requiredTests = requiredEvidenceTestIds();
+    if (requiredTests.length) {
+      const evidence = await Evidence.find({ reportId: report._id, testId: { $in: requiredTests }, status: 'ACTIVE' }).select('testId').lean();
+      const missing = requiredTests.filter(testId => !evidence.some(item => item.testId === testId));
+      if (missing.length) return res.status(409).json({ message: `Verification evidence is required for ${missing.join(', ')} before this report can be submitted.`, code: 'EVIDENCE_REQUIRED', missingTests: missing });
+    }
+    if (report.status === 'UNDER_REVIEW') return res.json({ report });
+    const resubmission = report.status === 'CHANGES_REQUESTED';
+    report.stage = 'REVIEW'; report.status = 'UNDER_REVIEW'; report.submittedForReviewAt = new Date(); if (resubmission) report.resubmittedAt = new Date(); await report.save();
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;
     res.json({ report: value });
   } catch (e) { next(e); }

@@ -28,6 +28,7 @@ const repeatabilitySchema = new Schema({
   status: { type: String, enum: ['IN_PROGRESS', 'COMPLETED', 'REVALIDATION_REQUIRED'], default: 'IN_PROGRESS' },
   result: { type: String, enum: ['NOT_DETERMINED', 'PASS', 'FAIL', 'INCOMPLETE', 'REVALIDATION_REQUIRED'], default: 'NOT_DETERMINED' },
   instrumentSnapshot: Schema.Types.Mixed, sourceFingerprint: String, zeroReferenceE0: Number,
+  observationUnit: { type: String, enum: ['mg', 'g', 'kg', 't'] },
   procedureConfirmation: Schema.Types.Mixed, series: { type: [seriesSchema], default: [] },
   revisionHistory: { type: [Schema.Types.Mixed], default: [] }, events: { type: [eventSchema], default: [] }, startedAt: Date, completedAt: Date,
 }, { timestamps: true, collection: 'repeatabilityTests' });

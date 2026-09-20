@@ -1,8 +1,13 @@
 import mongoose, { Schema } from 'mongoose';
 
 const observationSchema = new Schema({
-  sequence: Number, unit: String, inputTareValue: Number, inputGrossLoad: Number, inputLoadL: Number, inputIndicationI: Number, inputDeltaL: Number,
+  observationId: String, sequence: Number, unit: String, inputTareValue: Number, inputGrossLoad: Number, inputLoadL: Number, inputIndicationI: Number, inputDeltaL: Number,
+  inputTareLoad: Number, inputIndicationI0: Number,
+  inputReferenceTare: Number, inputTareDeviceIndication: Number, inputMainIndication: Number,
   tareValue: Number, grossLoad: Number, netLoad: Number, indicationI: Number, deltaL: Number, direction: String,
+  tareLoad: Number, loadL0: Number, indicationI0: Number, errorE0: Number, accuracyLimit: Number,
+  referenceTare: Number, tareDeviceIndication: Number, mainIndication: Number, difference: Number,
+  comparisonCriterion: Number, comparisonCriterionUnit: String, comparisonCriterionType: String,
   trueIndicationP: Number, rawErrorE: Number, correctedErrorEc: Number, accuracyClass: String, e: Number, m: Number,
   mpeMultiplier: Number, mpeValue: Number, mpeUnit: String, complianceResult: String, result: String, notes: String, recordedAt: Date,
 }, { _id: false });
