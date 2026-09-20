@@ -1,55 +1,184 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { ArrowLeft, Check, LogOut, Send } from 'lucide-react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { ArrowLeft, Check, Download, LogOut, Send } from 'lucide-react';
 import axios from 'axios';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import EvidencePanel from '../evidence/EvidencePanel';
+import './final-report.css';
 
-const mass = (value: unknown, unit = 'g') => Number.isFinite(Number(value)) ? `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 6 }).format(Number(value))} ${unit}` : '—';
 const valueOrDash = (value: unknown) => value === undefined || value === null || value === '' ? '—' : String(value);
 const dateTime = (value: unknown) => value ? new Date(String(value)).toLocaleString() : '—';
+const mass = (value: unknown, unit = 'g') => Number.isFinite(Number(value)) ? `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 6 }).format(Number(value))} ${unit}` : '—';
 
 export default function FinalReportWorkspace() {
-  const { reportId = '' } = useParams(); const location = useLocation(); const nav = useNavigate();
-  const [data, setData] = useState<any>(null); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const load = () => void axios.get(`/test-reports/${reportId}/review`).then(response => setData(response.data)).catch(e => setError(e.response?.data?.message || 'Unable to load the report preview.'));
-  useEffect(load, [reportId]);
-  const finalize = async () => { setBusy(true); setError(''); try { await axios.post(`/test-reports/${reportId}/review/submit`); nav(`/tester/reports/${reportId}/final-report`); } catch (e: any) { setError(e.response?.data?.message || 'Unable to finalize this report.'); } finally { setBusy(false); } };
-  if (!data) return <main className="verification-page"><div className="verification-loading">{error || 'Loading report preview…'}</div></main>;
-  const { report, verification, performance, zeroChecking, zeroSettingBeforeLoading, tare, eccentricity, multipleIndicating, discrimination, sensitivity, repeatability, variationWithTime, stabilityOfEquilibrium, influenceFactors, endurance } = data;
-  const finalized = report.stage === 'FINAL_REPORT' && report.status === 'COMPLETED'; const submittedForReview = report.status === 'UNDER_REVIEW'; const changesRequested = report.status === 'CHANGES_REQUESTED'; const reviewMode = location.pathname.endsWith('/review');
-  const points = performance?.loadPoints || []; const unit = performance?.instrumentSnapshot?.unit || report.instrument?.unit || 'g';
-  const routeTests = [...(data.applicability?.tests || [])].sort((a: any, b: any) => (a.order || 0) - (b.order || 0)); const pendingTests = data.pendingTests || []; const attentionTests = data.attentionTests || [];
-  const canFinalize = !finalized && !submittedForReview && report.status !== 'REJECTED' && data.readinessError == null && attentionTests.length === 0 && pendingTests.length === 0 && performance?.status === 'COMPLETED';
-  const overall = finalized ? performance?.result || 'NEEDS REVIEW' : canFinalize ? performance?.result || 'NEEDS REVIEW' : 'NEEDS REVIEW'; const environment = report.environment || {};
-  const zeroIndicatorPhase = zeroChecking?.phases?.find((phase: any) => phase.code === 'A.4.2.2'); const zeroIndicatorObservations = Array.isArray(zeroIndicatorPhase?.observations?.indicationObservations) ? zeroIndicatorPhase.observations.indicationObservations : [];
-  const applicableCount = routeTests.filter((test: any) => test.status === 'APPLICABLE').length; const records = { performance, zeroChecking, zeroSettingBeforeLoading, multipleIndicating, tare, eccentricity, discrimination, sensitivity, repeatability, variationWithTime, stabilityOfEquilibrium, influenceFactors, endurance };
-  const completedCount = routeTests.filter((test: any) => routeStatus(test, records).label === 'COMPLETED').length; const failedCount = [performance, zeroChecking, zeroSettingBeforeLoading, multipleIndicating, tare, eccentricity, discrimination, sensitivity, repeatability, variationWithTime, stabilityOfEquilibrium, influenceFactors, endurance].filter((test: any) => test?.result === 'FAIL').length;
+  const { reportId = '' } = useParams();
+  const nav = useNavigate();
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+  const [messageNotice, setMessageNotice] = useState('');
+
+  const load = async () => {
+    try {
+      const response = await axios.get(`/test-reports/${reportId}/review`);
+      setData(response.data);
+    } catch (e: any) {
+      setError(e.response?.data?.message || 'Unable to load the report review.');
+    }
+  };
+
+  useEffect(() => { void load(); }, [reportId]);
+
+  const downloadPdf = async () => {
+    setBusy(true); setError('');
+    try {
+      const response = await axios.get(`/test-reports/${reportId}/review/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(response.data);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${data.report.testReportId}-draft-report.pdf`;
+      document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+      await load();
+    } catch (e: any) {
+      setError(e.response?.data?.message || 'Unable to generate the draft PDF.');
+    } finally { setBusy(false); }
+  };
+
+  const submitForReview = async () => {
+    setBusy(true); setError(''); setConfirmSubmit(false);
+    try {
+      await axios.post(`/test-reports/${reportId}/review/submit`);
+      await load();
+    } catch (e: any) {
+      setError(e.response?.data?.message || 'Unable to submit this report for review.');
+    } finally { setBusy(false); }
+  };
+
+  const sendMessage = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError(''); setMessageNotice('');
+    try {
+      await axios.post(`/test-reports/${reportId}/review/messages`, { subject, message });
+      setSubject(''); setMessage(''); setMessageNotice('Message sent to the reviewing authority.'); await load();
+    } catch (e: any) {
+      setError(e.response?.data?.message || 'Unable to send the authority message.');
+    } finally { setBusy(false); }
+  };
+
+  if (!data) return <main className="verification-page"><div className="verification-loading">{error || 'Loading final testing review…'}</div></main>;
+
+  const { report, performance, influenceFactors, endurance } = data;
+  const prototype = Boolean(data.prototype);
+  const submitted = ['AWAITING_REVIEW', 'UNDER_REVIEW'].includes(String(report.status));
+  const finalized = report.stage === 'FINAL_REPORT' && report.status === 'COMPLETED';
+  const unit = report.instrument?.unit || performance?.instrumentSnapshot?.unit || 'g';
+  const routeTests = [...(data.applicability?.tests || [])].sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+  const records = { performance, influenceFactors, endurance, ...data };
+  const pendingTests = data.pendingTests || [];
+  const attentionTests = data.attentionTests || [];
+  const canSubmit = !submitted && !finalized && !data.readinessError && pendingTests.length === 0 && attentionTests.length === 0;
+  const overall = data.overallResult || 'INCOMPLETE';
+  const overallClass = String(overall).toLowerCase();
+
   return <main className="verification-page">
-    <header className="workspace-top"><Link to={`/tester/reports/${reportId}/test-conditions`}><ArrowLeft size={16} /> Complete Test Conditions</Link><div className="workspace-brand"><strong>NAWI</strong><span>TEST &amp; REPORT SYSTEM</span></div><button className="report-logout" onClick={() => { axios.post('/auth/logout').finally(() => nav('/login')); }}><LogOut size={15} /> Sign out</button></header>
+    <header className="workspace-top">
+      <Link to={submitted ? '/tester/dashboard' : `/tester/reports/${reportId}/testing`}><ArrowLeft size={16} /> {submitted ? 'Back to Dashboard' : 'Back to Testing'}</Link>
+      <div className="workspace-brand"><strong>NAWI</strong><span>TEST &amp; REPORT SYSTEM</span></div>
+      <button className="report-logout" onClick={() => { axios.post('/auth/logout').finally(() => nav('/login')); }}><LogOut size={15} /> Sign out</button>
+    </header>
+
     <section className="workspace-content report-review-content">
-      <div className="workspace-heading report-review-heading"><div><span className="technical-label">TEST REPORT · {reviewMode && !finalized ? 'REVIEW' : 'FINAL REPORT'}</span><h1>{reviewMode && !finalized ? 'Review &amp; Submit' : 'Final Report'}</h1><p>{changesRequested ? 'Reviewer changes were requested. Correct the allowed draft content and resubmit.' : reviewMode && !finalized ? 'Review the complete test record before submitting it for technical review.' : 'The submitted report and recorded test results.'}</p>{report.reviewComment && <div className="reviewer-comment"><strong>Reviewer comment</strong><span>{report.reviewComment}</span></div>}</div><span className={`workspace-status ${finalized ? 'complete' : 'active'}`}>{finalized ? 'Finalized' : submittedForReview ? 'Awaiting review' : changesRequested ? 'Changes requested' : 'Ready for review'}</span></div>
-      <section className="review-summary-strip"><SummaryMetric label="Report number" value={report.testReportId} /><SummaryMetric label="Application / reference" value={report.externalApplicationReference || report.applicationNumber} /><SummaryMetric label="Assigned tester" value={report.laboratory?.testerName || report.testerName || report.submittedByName} /><SummaryMetric label="Current status" value={finalized ? 'Finalized' : report.status || 'Review pending'} /></section>
-      <div className="review-document">
-        <ReviewSection title="Report" kicker="01" meta={report.testReportId}><SummaryGrid items={[["Report number", report.testReportId], ["Application / reference", report.externalApplicationReference || report.applicationNumber], ["Created", dateTime(report.createdAt)], ["Tester", report.laboratory?.testerName || report.testerName || report.submittedByName], ["Laboratory", report.laboratory?.name], ["Test start", dateTime(report.laboratory?.testStartDate)], ["Test end", dateTime(report.laboratory?.testEndDate)], ["Workflow status", finalized ? 'Finalized' : report.status || 'Review pending']]} /></ReviewSection>
-        <ReviewSection title="Application" kicker="02" meta={report.externalApplicationReference || report.applicationNumber}><SummaryGrid items={[["Applicant / manufacturer", report.applicant?.name || report.manufacturer?.name], ["Contact", report.applicant?.contactName], ["Email", report.applicant?.email], ["Phone", report.applicant?.contactNumber], ["Address", report.applicant?.address]]} /></ReviewSection>
-        <ReviewSection title="Instrument" kicker="03" meta={report.instrument?.typeDesignation}><SummaryGrid items={[["Manufacturer", report.manufacturer?.name], ["Model / type designation", report.instrument?.typeDesignation], ["Serial number", report.instrument?.serialNumber], ["Accuracy class", report.instrument?.accuracyClass], ["Indication type", report.instrument?.indicationType], ["Mass unit", unit], ["Min", mass(report.instrument?.min, unit)], ["Max", mass(report.instrument?.max, unit)], ["e", mass(report.instrument?.e, unit)], ["d", mass(report.instrument?.d, unit)], ["n", report.instrument?.n], ["Range / interval", `${valueOrDash(report.instrument?.rangeType)} / ${valueOrDash(report.instrument?.intervalType)}`], ["Zero-setting / tracking", `${valueOrDash(report.instrument?.zeroSettingMethod)} / ${report.instrument?.zeroTracking == null ? '—' : report.instrument.zeroTracking ? 'Yes' : 'No'}`], ["Zero-indicating / digital", `${report.instrument?.zeroIndicatingDevice == null ? '—' : report.instrument.zeroIndicatingDevice ? 'Yes' : 'No'} / ${report.instrument?.digitalIndication == null ? '—' : report.instrument.digitalIndication ? 'Yes' : 'No'}`], ["Tare device", report.instrument?.tareDevicePresent == null ? report.instrument?.tareDevice : report.instrument.tareDevicePresent ? 'Yes' : 'No'], ["Other configuration", `${valueOrDash(report.instrument?.loadReceptorType)} · ${valueOrDash(report.instrument?.powerSupplyType)}`]]} /></ReviewSection>
-        <ReviewSection title="Test Session" kicker="04" meta={report.laboratory?.name || 'Session conditions'}><div className="review-subsection"><h3>Session and laboratory</h3><SummaryGrid items={[["Laboratory", report.laboratory?.name], ["Location", report.laboratory?.location], ["Start date/time", dateTime(report.laboratory?.testStartDate)], ["End date/time", dateTime(report.laboratory?.testEndDate)], ["Power supply", report.powerSupply?.source], ["Nominal voltage", report.powerSupply?.voltage == null ? '—' : `${report.powerSupply.voltage} V`], ["Reference position", report.instrumentSetup?.instrumentLevelled]]} /></div><div className="review-subsection"><h3>Environment</h3><SummaryGrid items={[["Start temperature", environment.temperatureStart == null ? '—' : `${environment.temperatureStart} °C`], ["End temperature", environment.temperatureEnd == null ? '—' : `${environment.temperatureEnd} °C`], ["Start relative humidity", environment.relativeHumidityStart == null ? environment.relativeHumidity == null ? '—' : `${environment.relativeHumidity} %` : `${environment.relativeHumidityStart} %`], ["End relative humidity", environment.relativeHumidityEnd == null ? '—' : `${environment.relativeHumidityEnd} %`], ["Start pressure", environment.barometricPressureStart == null ? environment.barometricPressure == null ? '—' : `${environment.barometricPressure} hPa` : `${environment.barometricPressureStart} hPa`], ["End pressure", environment.barometricPressureEnd == null ? '—' : `${environment.barometricPressureEnd} hPa`]]} /></div></ReviewSection>
-        <ReviewSection title="Verification" kicker="05" meta={verification?.status === 'COMPLETED' ? 'Completed' : 'Incomplete'}><SummaryGrid items={[["Status", verification?.status], ["Overall result", verification?.overallStatus], ["Completed", dateTime(verification?.completedAt)]]} /></ReviewSection>
-        <ReviewSection title="Test Route" kicker="06" meta={`${applicableCount} applicable tests`}><div className="review-route-table" role="table" aria-label="Test route summary"><div className="review-route-header" role="row"><span>Clause</span><span>Test</span><span>Status</span><span>Result</span></div>{routeTests.map((test: any) => { const state = routeStatus(test, records); return <div className="review-route-row" role="row" key={test.code}><span className="review-route-code">{test.code}</span><div><strong>{friendlyName(test)}</strong><small>{test.source || 'OIML R 76-1:2006 Annex A'}</small></div><span className={`review-state ${state.className}`}>{state.label}</span><span className="review-route-result">{state.result}</span></div>; })}{!routeTests.length && <p className="review-empty">No generated test route is available.</p>}</div></ReviewSection>
-        <ReviewSection title="Test Results" kicker="07" meta={`${completedCount} completed`}><div className="review-result-summary"><ResultSummary title="Weighing performance" status={performance?.status === 'COMPLETED' ? performance.result : 'INCOMPLETE'} detail={performance?.status === 'COMPLETED' ? `${points.length} observations · ${points.length ? `${mass(Math.min(...points.map((point: any) => point.loadL)), unit)} to ${mass(Math.max(...points.map((point: any) => point.loadL)), unit)}` : 'No load range'}` : 'Complete the A.4.4 workspace to produce a result.'} /><ResultSummary title="Influence Factors" status={influenceFactors?.result || (influenceFactors?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={influenceFactors ? `${(influenceFactors.phases || []).filter((phase: any) => phase.status === 'COMPLETED').length} A.5 branches complete` : 'No saved A.5 result.'} /><ResultSummary title="Endurance" status={endurance?.result || (endurance?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={endurance ? `${Number(endurance.completedCycles || 0).toLocaleString('en-IN')} of ${Number(endurance.targetCycles || 100000).toLocaleString('en-IN')} applications · ${endurance.durabilityAssessment?.result || 'assessment pending'}` : 'No saved A.6 endurance session.'} /><ResultSummary title="Checking of Zero" status={zeroChecking?.result || (zeroChecking?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={zeroChecking ? `${(zeroChecking.phases || []).filter((phase: any) => phase.status === 'COMPLETED').length} phases complete` : 'No saved A.4.2 result.'} /><ResultSummary title="Setting to Zero" status={zeroSettingBeforeLoading?.result || (zeroSettingBeforeLoading?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={zeroSettingBeforeLoading ? `Source: ${zeroSettingBeforeLoading.sourcePhase || 'A.4.2.3'} · zero reference ${zeroSettingBeforeLoading.zeroReferenceEstablished ? 'established' : 'pending'}` : 'No saved A.4.3 result.'} /><ResultSummary title="Tare" status={tare?.result || (tare?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={tare ? `${(tare.phases || []).filter((phase: any) => phase.status === 'COMPLETED').length} phases complete` : 'No saved A.4.6 result.'} /><ResultSummary title="Eccentricity" status={eccentricity?.status === 'COMPLETED' ? eccentricity.result : 'INCOMPLETE'} detail={eccentricity ? String(eccentricity.method || 'Method pending') + ' · ' + String(eccentricity.positionCount || eccentricity.positions?.length || 0) + ' positions · test load ' + String(eccentricity.testLoad?.value ?? '—') + ' ' + String(eccentricity.testLoad?.unit || unit) : 'No saved A.4.7 result.'} /><ResultSummary title="Multiple indicating devices" status={multipleIndicating?.result || multipleIndicating?.status || 'INCOMPLETE'} detail={multipleIndicating ? 'Derived from A.4.4 · ' + String(multipleIndicating.comparisons?.length || 0) + ' device comparisons' : 'No saved A.4.5 comparison.'} /><ResultSummary title="Discrimination" status={discrimination?.result || (discrimination?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={discrimination ? `${(discrimination.stages || []).filter((stage: any) => stage.status === 'COMPLETED').length} of 3 load stages complete` : 'No saved A.4.8 result.'} /><ResultSummary title="Sensitivity" status={sensitivity?.result || (sensitivity?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={sensitivity ? `${(sensitivity.stages || []).filter((stage: any) => stage.status === 'COMPLETED').length} of 2 load stages complete · extra load and displacement derived from the saved instrument profile` : 'No saved A.4.9 result.'} /><ResultSummary title="Repeatability" status={repeatability?.result || (repeatability?.test?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={repeatability?.test ? `${repeatability.test.series?.filter((series: any) => series.status === 'COMPLETED').length || 0} of ${repeatability?.test?.series?.length || 0} series complete · ${repeatability.test.controlStage || 'VERIFICATION'} plan` : 'No saved A.4.10 result.'} /><ResultSummary title="Variation with time" status={variationWithTime?.result || (variationWithTime?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={variationWithTime ? `Creep: ${variationWithTime.creep?.result || 'INCOMPLETE'} · Zero Return: ${variationWithTime.zeroReturn?.result || 'INCOMPLETE'}` : 'No saved A.4.11 result.'} /><ResultSummary title="Stability of equilibrium" status={stabilityOfEquilibrium?.result || (stabilityOfEquilibrium?.status === 'COMPLETED' ? 'COMPLETED' : 'INCOMPLETE')} detail={stabilityOfEquilibrium ? `Print/storage: ${stabilityOfEquilibrium.printStorage?.result || 'INCOMPLETE'} · Continuous disturbance: ${stabilityOfEquilibrium.continuousDisturbance?.result || 'INCOMPLETE'}` : 'No saved A.4.12 result.'} /></div>{performance?.status === 'COMPLETED' && <details className="review-detail"><summary>View detailed A.4.4 observations · {points.length} load points</summary><div className="final-report-table-wrap"><table className="final-report-table"><thead><tr><th>#</th><th>Direction</th><th>Actual L ({unit})</th><th>Indication I ({unit})</th><th>ΔL ({unit})</th><th>P ({unit})</th><th>E ({unit})</th><th>E<sub>c</sub> ({unit})</th><th>MPE ({unit})</th><th>Result</th></tr></thead><tbody>{points.map((point: any) => <tr key={point.sequence}><td>{point.sequence}</td><td>{point.direction === 'DECREASING' ? 'Decreasing' : 'Increasing'}</td><td>{mass(point.loadL, unit)}</td><td>{mass(point.indicationI, unit)}</td><td>{mass(point.deltaL, unit)}</td><td>{mass(point.trueIndicationP, unit)}</td><td>{mass(point.rawErrorE, unit)}</td><td>{mass(point.correctedErrorEc, unit)}</td><td>{point.mpeValue == null ? '—' : `±${mass(point.mpeValue, unit)}`}</td><td><span className={`point-result ${String(point.complianceResult || point.result || '').toLowerCase()}`}>{point.complianceResult || point.result || '—'}</span></td></tr>)}</tbody></table></div></details>}<Link className="review-detail-link" to={`/tester/reports/${reportId}/testing`}>View detailed observations</Link></ReviewSection>
-        {(attentionTests.length > 0 || data.readinessError) && <ReviewSection title="Attention" kicker="08" meta="Action required"><div className="review-attention">{data.readinessError && <p className="review-attention-lead">{data.readinessError}</p>}{attentionTests.map((test: any) => <div className="review-attention-item" key={test.code}><div><strong>{test.code} · {friendlyName(test)}</strong><span>{test.reason || 'This test needs configuration or review before submission.'}</span></div><Link to={sourcePath(test.code)}>Review issue</Link></div>)}</div></ReviewSection>}
-        <section className={`review-overall ${String(overall).toLowerCase().replace(/\s+/g, '-')}`}><div><span className="technical-label">OVERALL TEST RESULT</span><h2>{overall}</h2><p>{finalized ? 'This result reflects the saved verification and testing record.' : canFinalize ? 'All required records are complete and ready for submission.' : `${applicableCount} applicable tests · ${completedCount} completed · ${failedCount} failed · ${pendingTests.length + attentionTests.length} requiring attention`}</p></div><div className="review-overall-counts"><strong>{completedCount}</strong><span>completed</span><strong>{failedCount}</strong><span>failed</span></div></section>
+      <div className="workspace-heading report-review-heading">
+        <div><span className="technical-label">FINAL TESTING HANDOFF</span><h1>Final Testing Review</h1><p>Review the completed test record before submitting it to the reviewing authority.</p></div>
+        <span className={`workspace-status ${submitted || finalized ? 'complete' : 'active'}`}>{submitted ? 'Submitted for review' : finalized ? 'Finalized' : 'Draft review'}</span>
       </div>
-      {zeroIndicatorPhase && <ReviewSection title="Zero indicator observations" kicker="07A" meta={`${zeroIndicatorObservations.length} readings`}><div className="zero-review-observations"><div><span>Scale interval d</span><strong>{mass(zeroIndicatorPhase.observations?.d ?? report.instrument?.d, zeroIndicatorPhase.observations?.unit || unit)}</strong><span>Observation increment</span><strong>{mass(zeroIndicatorPhase.observations?.increment, zeroIndicatorPhase.observations?.unit || unit)}</strong><span>Lower signed indication</span><strong>{mass(zeroIndicatorPhase.observations?.observedLowerRange, zeroIndicatorPhase.observations?.unit || unit)}</strong><span>Upper signed indication</span><strong>{mass(zeroIndicatorPhase.observations?.observedUpperRange, zeroIndicatorPhase.observations?.unit || unit)}</strong></div>{zeroIndicatorObservations.length ? <ol>{zeroIndicatorObservations.map((observation: any) => <li key={observation.sequence}><span>{observation.sequence}</span><strong>{mass(observation.inputValue ?? observation.value, observation.inputUnit || observation.unit || unit)}</strong></li>)}</ol> : <p>No structured readings recorded.</p>}</div></ReviewSection>}
-      {error && <div className="report-error">{error}</div>}
-      <div className="completion-bar report-submit-bar"><Link className="report-secondary" to={`/tester/reports/${reportId}/testing`}><ArrowLeft size={16} /> Back to Testing</Link>{finalized ? <div className="completion-message"><Check size={18} /><div><strong>Report finalized</strong><span>This report is approved and read-only.</span></div></div> : submittedForReview ? <div className="completion-message"><Check size={18} /><div><strong>Awaiting reviewer</strong><span>The submitted report is now in the reviewer queue.</span></div></div> : <div className="review-submit-area"><p>Submitting this report will send the completed test record to the reviewer.</p><button className="report-primary" onClick={finalize} disabled={busy || !canFinalize}>{busy ? 'Submitting…' : changesRequested ? 'Resubmit for Review' : 'Submit for Review'}<Send size={16} /></button></div>}</div>
+      {prototype && <div className="report-prototype-banner"><strong>PROTOTYPE WORKFLOW</strong><span>This report contains synthetic/prototype test data and must not be treated as a genuine legal-metrology test report.</span></div>}
+      {error && <div className="report-error" role="alert">{error}</div>}
+
+      <section className="review-summary-strip">
+        <SummaryMetric label="Report number" value={report.testReportId} />
+        <SummaryMetric label="Instrument" value={report.instrument?.typeDesignation} />
+        <SummaryMetric label="Mathematical result" value={overall} />
+        <SummaryMetric label="Workflow status" value={submitted ? 'AWAITING REVIEW' : report.status} />
+        {submitted && <SummaryMetric label="Submitted by / at" value={`${valueOrDash(report.testerNameSnapshot || report.laboratory?.testerName)} · ${dateTime(report.submittedForReviewAt)}`} />}
+      </section>
+
+      <div className="review-document">
+        <ReviewSection title="Report overview" meta={report.testReportId}>
+          <SummaryGrid items={[
+            ['Report number', report.testReportId], ['Manufacturer', report.manufacturer?.name], ['Model / type', report.instrument?.typeDesignation],
+            ['Serial number', report.instrument?.serialNumber], ['Accuracy class', report.instrument?.accuracyClass], ['Min', mass(report.instrument?.min, unit)],
+            ['Max', mass(report.instrument?.max, unit)], ['e / d', `${mass(report.instrument?.e, unit)} / ${mass(report.instrument?.d, unit)}`], ['Unit', unit],
+            ['Laboratory', report.laboratory?.name], ['Tester', report.laboratory?.testerName || report.testerNameSnapshot],
+            ['Test dates', `${dateTime(report.laboratory?.testStartDate)} → ${dateTime(report.laboratory?.testEndDate)}`],
+          ]} />
+        </ReviewSection>
+
+        <ReviewSection title="Test results" meta={`${routeTests.length} applicable route entries`}>
+          <div className="review-overall-row">
+            <section className={`review-overall review-overall-${overallClass}`}><div><span className="technical-label">OVERALL MATHEMATICAL RESULT</span><h2>{overall}</h2><p>Derived from the persisted test calculations. Prototype classification is shown separately.</p></div></section>
+            {prototype && <div className="review-classification"><small>Classification</small><strong>PROTOTYPE WORKFLOW</strong><span>Not legal-metrology evidence</span></div>}
+          </div>
+          <div className="review-route-table" role="table" aria-label="Persisted test summary">
+            <div className="review-route-header" role="row"><span>Clause</span><span>Test</span><span>Status</span><span>Result</span></div>
+            {routeTests.map((test: any) => { const state = routeState(test, records, prototype); return <div className="review-route-row" role="row" key={test.code}><span className="review-route-code">{test.code}</span><div><strong>{friendlyName(test)}</strong><small>{test.source || 'OIML R 76-1:2006 Annex A'}</small></div><span className={`review-state ${state.className}`}>{state.label}</span><span className="review-route-result">{state.result}</span></div>; })}
+            {!routeTests.length && <p className="review-empty">No generated test route is available.</p>}
+          </div>
+        </ReviewSection>
+
+        <ReviewSection title="Validation before submission" meta={canSubmit ? 'Ready' : 'Action required'}>
+          {canSubmit ? <div className="review-validation-ok"><Check size={17} /> All applicable test and report prerequisites are ready for submission.</div> : <div className="review-validation-list">
+            {data.readinessError && <p><strong>Test conditions:</strong> {data.readinessError}</p>}
+            {pendingTests.length > 0 && <p><strong>Incomplete tests:</strong> {pendingTests.map((item: any) => `${item.code} ${item.name || ''}`).join(', ')}</p>}
+            {attentionTests.length > 0 && <p><strong>Attention required:</strong> {attentionTests.map((item: any) => `${item.code} ${item.reason || item.name || 'review the test record'}`).join(', ')}</p>}
+          </div>}
+        </ReviewSection>
+
+        {endurance && <ReviewSection title="A.6 endurance summary" meta={prototype ? 'Prototype workflow' : endurance.status}>
+          <div className="review-fields">
+            <SummaryMetric label="Applications" value={`${Number(endurance.completedCycles || 0).toLocaleString('en-IN')} / ${Number(endurance.targetCycles || 100000).toLocaleString('en-IN')}`} />
+            <SummaryMetric label="Synthetic applications" value={Number(endurance.syntheticCycles || 0).toLocaleString('en-IN')} />
+            <SummaryMetric label="Pre-endurance baseline" value={`${valueOrDash(endurance.preWeighing?.sourceObservationId)} · ${mass(endurance.preWeighing?.correctedErrorEc, unit)}`} />
+            <SummaryMetric label="Post-endurance error" value={mass(endurance.postWeighing?.Ec, unit)} />
+            <SummaryMetric label="Durability result" value={endurance.durabilityAssessment?.result} />
+            <SummaryMetric label="Abnormal events" value={(endurance.events || []).filter((item: any) => String(item.action || '').toLowerCase().includes('abnormal')).length} />
+            <SummaryMetric label="Recovery checkpoints" value={(endurance.checkpoints || []).length} />
+          </div>
+          {prototype && <p className="report-prototype-copy">Synthetic endurance counts and prototype navigation remain visibly classified as non-legal evidence.</p>}
+        </ReviewSection>}
+
+        <ReviewSection title="Complete results" meta="Persisted observations and calculations">
+          <details className="review-detail"><summary>View persisted report details</summary><div className="review-complete-details"><p>Detailed observations and calculations remain in the existing test workspaces and are represented here from their persisted result records.</p>{performance?.loadPoints?.length ? <div className="final-report-table-wrap"><table className="final-report-table"><thead><tr><th>#</th><th>Load</th><th>Indication</th><th>Ec</th><th>MPE</th><th>Result</th></tr></thead><tbody>{performance.loadPoints.map((point: any) => <tr key={point.sequence}><td>{point.sequence}</td><td>{mass(point.loadL, unit)}</td><td>{mass(point.indicationI, unit)}</td><td>{mass(point.correctedErrorEc, unit)}</td><td>{point.mpeValue == null ? '—' : mass(point.mpeValue, unit)}</td><td>{point.complianceResult || point.result || '—'}</td></tr>)}</tbody></table></div> : <p>No A.4.4 observations recorded.</p>}</div></details>
+        </ReviewSection>
+
+        <ReviewSection title="Additional evidence" meta="Optional report-level support">
+          <EvidencePanel context={{ reportId, category: 'REPORT', evidenceType: 'report_additional', label: 'Additional report evidence', title: 'Additional report evidence', testName: 'Final Testing Review', oimlReference: 'Report' }} />
+        </ReviewSection>
+
+        <ReviewSection title="Authority communication" meta="Report-scoped message thread">
+          <form className="authority-message-form" onSubmit={sendMessage}><label>Subject<input value={subject} onChange={event => setSubject(event.target.value)} required maxLength={200} placeholder="Report ready for review" /></label><label>Message<textarea value={message} onChange={event => setMessage(event.target.value)} required rows={5} maxLength={10000} placeholder="Write a message to the reviewing authority." /></label><button className="report-primary" type="submit" disabled={busy || !subject.trim() || !message.trim()}><Send size={16} /> Send message</button></form>
+          {messageNotice && <div className="handoff-success"><Check size={16} /> {messageNotice}</div>}
+          <div className="authority-message-list">{(data.messages || []).map((item: any) => <article key={item._id}><div><strong>{item.subject}</strong><small>{item.senderNameSnapshot} · {dateTime(item.createdAt)}</small></div><p>{item.message}</p></article>)}{!(data.messages || []).length && <p className="review-empty">No authority messages yet.</p>}</div>
+        </ReviewSection>
+      </div>
+
+      <section className="handoff-actions" aria-label="Final report actions">
+        <div><span className="technical-label">SUBMISSION</span><h2>{submitted ? 'Submitted for review' : 'Final actions'}</h2><p>{submitted ? `Submitted ${dateTime(report.submittedForReviewAt)} by ${valueOrDash(report.testerNameSnapshot || report.laboratory?.testerName)}.` : data.readinessError || (pendingTests.length ? `${pendingTests.length} applicable test(s) remain before submission.` : 'Download the draft, then submit the persisted report when ready.')}</p></div>
+        <div className="handoff-action-buttons">
+          <button className="report-primary" onClick={() => setConfirmSubmit(true)} disabled={busy || submitted || finalized}><Send size={16} /> Submit for Review</button>
+          <button className="report-secondary" onClick={() => void downloadPdf()} disabled={busy}><Download size={16} /> {busy ? 'Preparing…' : 'Download Draft PDF'}</button>
+          <button className="report-tertiary" onClick={() => nav('/tester/dashboard')}><ArrowLeft size={16} /> Go to Dashboard</button>
+        </div>
+      </section>
+
+      {confirmSubmit && <div className="report-confirm-backdrop" role="presentation"><div className="report-confirm" role="dialog" aria-modal="true" aria-labelledby="submit-report-title"><span className="technical-label">SUBMIT REPORT FOR REVIEW</span><h2 id="submit-report-title">Send this report to the reviewing authority?</h2>{prototype && <p className="report-prototype-copy">This is a PROTOTYPE workflow. Submission does not make synthetic endurance data legally valid.</p>}{!canSubmit && <p className="report-validation-copy">The server will not accept submission yet: {data.readinessError || (pendingTests.length ? `${pendingTests.length} applicable test(s) remain.` : 'a report prerequisite requires attention.')}</p>}<p>The backend remains authoritative and will confirm or reject the transition.</p><div><button className="report-secondary" onClick={() => setConfirmSubmit(false)}>Cancel</button><button className="report-primary" onClick={() => void submitForReview()} disabled={busy}>Submit for Review <Send size={16} /></button></div></div></div>}
     </section>
   </main>;
 }
 
 function SummaryMetric({ label, value }: { label: string; value: unknown }) { return <div className="review-summary-metric"><small>{label}</small><strong>{valueOrDash(value)}</strong></div>; }
-function ReviewSection({ title, kicker, meta, children }: { title: string; kicker: string; meta?: string; children: ReactNode }) { return <section className="review-section"><div className="review-section-heading"><div><span className="review-section-kicker">{kicker}</span><h2>{title}</h2></div><span>{valueOrDash(meta)}</span></div>{children}</section>; }
+function ReviewSection({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) { return <section className="review-section"><div className="review-section-heading"><h2>{title}</h2><span>{valueOrDash(meta)}</span></div>{children}</section>; }
 function SummaryGrid({ items }: { items: Array<[string, unknown]> }) { return <div className="review-fields">{items.map(([label, value]) => <div className="review-field" key={label}><small>{label}</small><strong>{valueOrDash(value)}</strong></div>)}</div>; }
-function ResultSummary({ title, status, detail }: { title: string; status: string; detail: string }) { return <div className="review-result-card"><div><small>{title}</small><strong className={`review-result-status ${String(status).toLowerCase()}`}>{status}</strong></div><p>{detail}</p></div>; }
-function routeStatus(test: any, records: { performance?: any; zeroChecking?: any; zeroSettingBeforeLoading?: any; multipleIndicating?: any; tare?: any; eccentricity?: any; discrimination?: any; sensitivity?: any; repeatability?: any; variationWithTime?: any; stabilityOfEquilibrium?: any; influenceFactors?: any; endurance?: any }) { const record = test.code === 'A.4.2' ? records.zeroChecking : test.code === 'A.4.3' ? records.zeroSettingBeforeLoading : test.code === 'A.4.4' ? records.performance : test.code === 'A.4.5' ? records.multipleIndicating : test.code === 'A.4.6' ? records.tare : test.code === 'A.4.7' ? records.eccentricity : test.code === 'A.4.8' ? records.discrimination : test.code === 'A.4.9' ? records.sensitivity : test.code === 'A.4.10' ? records.repeatability?.test : test.code === 'A.4.11' ? records.variationWithTime : test.code === 'A.4.12' ? records.stabilityOfEquilibrium : test.code === 'A.5' ? records.influenceFactors : test.code === 'A.6' ? records.endurance : null; if (record?.status === 'COMPLETED' || (test.code === 'A.4.5' && ['PASS', 'FAIL'].includes(record?.status))) return { label: 'COMPLETED', result: record.result || record.status || '—', className: 'completed' }; if (record?.status === 'IN_PROGRESS') return { label: 'IN PROGRESS', result: '—', className: 'progress' }; if (record?.status === 'REVALIDATION_REQUIRED') return { label: 'REVALIDATION REQUIRED', result: '—', className: 'attention' }; if (test.status === 'NOT_APPLICABLE') return { label: 'NOT APPLICABLE', result: '—', className: 'muted' }; if (test.status === 'REQUIRES_CONFIGURATION') return { label: 'CONFIGURATION REQUIRED', result: '—', className: 'attention' }; if (test.status === 'UNSUPPORTED') return { label: 'UNSUPPORTED', result: '—', className: 'attention' }; return { label: 'INCOMPLETE', result: '—', className: 'pending' }; }
-function sourcePath(code: string, reportId = window.location.pathname.split('/')[3] || '') { const base = `/tester/reports/${reportId}/testing`; return code === 'A.4.2' ? `${base}/a4-2` : code === 'A.4.3' ? `${base}/a4-3` : code === 'A.4.4' ? `${base}/a4-4` : code === 'A.4.5' ? `${base}/a4-5` : code === 'A.4.6' ? `${base}/a4-6` : code === 'A.4.7' ? `${base}/a4-7` : code === 'A.4.8' ? `${base}/a4-8` : code === 'A.4.9' ? `${base}/a4-9` : code === 'A.4.10' ? `${base}/a4-10` : code === 'A.4.11' ? `${base}/a4-11` : code === 'A.4.12' ? `${base}/a4-12` : code === 'A.5' ? `/tester/reports/${reportId}/influence-factors` : code === 'A.6' ? `/tester/reports/${reportId}/endurance` : base; }
-function friendlyName(test: any) { const names: Record<string, string> = { 'A.4.2': 'Checking of Zero', 'A.4.3': 'Setting to Zero Before Loading', 'A.4.4': 'Weighing Performance', 'A.4.5': 'Multiple Indicating Devices', 'A.4.6': 'Tare', 'A.4.7': 'Eccentricity', 'A.4.8': 'Discrimination', 'A.4.10': 'Repeatability', 'A.4.11': 'Variation of Indication with Time', 'A.4.12': 'Stability of Equilibrium', A5: 'Influence Factors', 'A.5': 'Influence Factors', 'A.6': 'Endurance' }; return names[test.code] || test.name; }
+function friendlyName(test: any) { const names: Record<string, string> = { 'A.4.2': 'Checking of Zero', 'A.4.3': 'Setting to Zero Before Loading', 'A.4.4': 'Weighing Performance', 'A.4.5': 'Multiple Indicating Devices', 'A.4.6': 'Tare', 'A.4.7': 'Eccentricity', 'A.4.8': 'Discrimination', 'A.4.9': 'Sensitivity', 'A.4.10': 'Repeatability', 'A.4.11': 'Variation of Indication with Time', 'A.4.12': 'Stability of Equilibrium', 'A.5': 'Influence Factors', 'A.6': 'Endurance' }; return names[test.code] || test.name || test.code; }
+function routeState(test: any, records: any, prototype: boolean) { if (test.code === 'A.6' && prototype) return { label: 'PROTOTYPE', result: records.endurance?.durabilityAssessment?.result || 'INCOMPLETE', className: 'progress' }; const recordMap: Record<string, any> = { 'A.4.2': records.zeroChecking, 'A.4.3': records.zeroSettingBeforeLoading, 'A.4.4': records.performance, 'A.4.5': records.multipleIndicating, 'A.4.6': records.tare, 'A.4.7': records.eccentricity, 'A.4.8': records.discrimination, 'A.4.9': records.sensitivity, 'A.4.10': records.repeatability?.test || records.repeatability, 'A.4.11': records.variationWithTime, 'A.4.12': records.stabilityOfEquilibrium, 'A.5': records.influenceFactors, 'A.6': records.endurance }; const record = recordMap[test.code]; if (record?.status === 'COMPLETED' || (test.code === 'A.4.5' && ['PASS', 'FAIL'].includes(record?.status))) return { label: 'COMPLETED', result: record.result || record.status || '—', className: 'completed' }; if (record?.status === 'IN_PROGRESS') return { label: 'IN PROGRESS', result: '—', className: 'progress' }; if (test.status === 'NOT_APPLICABLE') return { label: 'NOT APPLICABLE', result: '—', className: 'muted' }; return { label: 'INCOMPLETE', result: '—', className: 'pending' }; }

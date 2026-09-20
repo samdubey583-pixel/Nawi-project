@@ -28,7 +28,7 @@ const attentionStatuses = new Set(['CHANGES_REQUESTED', 'RETEST_REQUIRED', 'REJE
 export function dashboardReportCategory(report: DashboardReport): DashboardReportCategory {
   const status = String(report.status || '');
   if (attentionStatuses.has(status)) return 'ATTENTION';
-  if (status === 'UNDER_REVIEW') return 'UNDER_REVIEW';
+  if (status === 'UNDER_REVIEW' || status === 'AWAITING_REVIEW') return 'UNDER_REVIEW';
   if (status === 'COMPLETED' || report.stage === 'FINAL_REPORT') return 'COMPLETED';
   if (inProgressStatuses.has(status)) return 'IN_PROGRESS';
   return 'OTHER';
@@ -36,19 +36,20 @@ export function dashboardReportCategory(report: DashboardReport): DashboardRepor
 
 export function dashboardCounts(reports: DashboardReport[]) {
   return reports.reduce((counts, report) => {
-    const category = dashboardReportCategory(report);
-    if (category === 'IN_PROGRESS') counts.inProgressCount += 1;
-    if (category === 'COMPLETED') counts.completedCount += 1;
-    if (category === 'UNDER_REVIEW') counts.underReviewCount += 1;
+    const status = String(report.status || '');
+    if (status === 'TESTING') counts.activeTests += 1;
+    if (status === 'AWAITING_REVIEW' || status === 'UNDER_REVIEW') counts.awaitingReview += 1;
+    if (status === 'CHANGES_REQUESTED') counts.changesRequested += 1;
+    if (status === 'COMPLETED') counts.completedReports += 1;
     return counts;
-  }, { inProgressCount: 0, completedCount: 0, underReviewCount: 0 });
+  }, { activeTests: 0, awaitingReview: 0, changesRequested: 0, completedReports: 0 });
 }
 
 export function dashboardWorkflowSummary(reports: DashboardReport[]) {
   return reports.reduce((summary, report) => {
     const status = String(report.status || '');
     const category = dashboardReportCategory(report);
-    if (category === 'IN_PROGRESS') summary.testing += 1;
+    if (status === 'TESTING') summary.testing += 1;
     if (category === 'UNDER_REVIEW') summary.awaitingReview += 1;
     if (status === 'CHANGES_REQUESTED') summary.changesRequested += 1;
     if (status === 'RETEST_REQUIRED') summary.retestRequired += 1;
@@ -79,6 +80,7 @@ function testDestination(reportId: string, code: string) {
 }
 
 function currentTestFor(report: DashboardReport, applicability: DashboardApplicability[], artifacts: DashboardArtifact[]) {
+  if (report.status === 'AWAITING_REVIEW' || report.status === 'UNDER_REVIEW' || report.status === 'COMPLETED') return null;
   if (report.stage === 'APPLICATION') return { code: 'APPLICATION', name: 'Report setup', phase: null, path: `/tester/reports/${reportKey(report)}`, attention: false };
   if (report.stage === 'VERIFICATION') return { code: 'VERIFICATION', name: 'Verification', phase: null, path: `/tester/reports/${reportKey(report)}`, attention: false };
   for (const item of applicability.filter(item => item.route === 'A.4')) {
@@ -137,7 +139,9 @@ export function dashboardSession(report: DashboardReport, details?: {
     currentTest: currentTest ? { code: currentTest.code, name: currentTest.name, phase: currentTest.phase } : null,
     resumePath: details.category === 'IN_PROGRESS' || details.category === 'ATTENTION'
       ? currentTest?.path || `/tester/reports/${reportKey(report)}`
-      : `/tester/reports/${reportKey(report)}`,
+      : details.category === 'UNDER_REVIEW'
+        ? `/tester/reports/${reportKey(report)}/review`
+        : `/tester/reports/${reportKey(report)}`,
     actionLabel: details.category === 'IN_PROGRESS' ? 'Resume Testing' : details.category === 'ATTENTION' ? 'Open Attention' : 'View Report',
     routeProgress: details.routeProgress,
   };

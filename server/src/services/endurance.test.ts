@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessDurability, calculateEnduranceWeighing, enduranceApplicability, endurancePlan, nextCycleCount } from './endurance.js';
+import { assessDurability, calculateEnduranceWeighing, canSkipPhaseTwoForPrototype, enduranceApplicability, endurancePlan, isPrototypeWorkflow, isSyntheticBatchSize, nextCycleCount } from './endurance.js';
 
 const snapshot = (overrides: any = {}) => ({ accuracyClass: 'Class III', min: 200, max: 30000, e: 10, d: 1, unit: 'g' as const, rangeType: 'single-range', ...overrides });
 
@@ -33,4 +33,26 @@ test('cycle counter rejects negative and over-target updates', () => {
   assert.equal(nextCycleCount(99999), 100000);
   assert.throws(() => nextCycleCount(-1));
   assert.throws(() => nextCycleCount(100000));
+});
+
+test('prototype batch sizes are explicit and never alter the real one-application rule', () => {
+  assert.equal(isSyntheticBatchSize(100), true);
+  assert.equal(isSyntheticBatchSize(1000), true);
+  assert.equal(isSyntheticBatchSize(250), false);
+  assert.equal(nextCycleCount(73, 100, 100000), 173);
+  assert.throws(() => nextCycleCount(99950, 100, 100000));
+});
+
+test('endurance target remains derived from the configured Max and unit', () => {
+  assert.deepEqual(endurancePlan(snapshot({ max: 80000, unit: 'g' })).targetLoad, { value: 40000, unit: 'g', label: 'Approximately 50% of Max' });
+  assert.deepEqual(endurancePlan(snapshot({ max: 80, unit: 'kg' })).targetLoad, { value: 40, unit: 'kg', label: 'Approximately 50% of Max' });
+});
+
+test('prototype phase skip requires a complete synthetic target and remains distinct from real completion', () => {
+  assert.equal(canSkipPhaseTwoForPrototype({ completedCycles: 100000, targetCycles: 100000, syntheticCycles: 100000 }), true);
+  assert.equal(canSkipPhaseTwoForPrototype({ completedCycles: 99999, targetCycles: 100000, syntheticCycles: 99999 }), false);
+  assert.equal(canSkipPhaseTwoForPrototype({ completedCycles: 100000, targetCycles: 100000, syntheticCycles: 0 }), false);
+  assert.equal(isPrototypeWorkflow({ phase2SkipMode: 'PROTOTYPE' }), true);
+  assert.equal(isPrototypeWorkflow({ phases: [{ code: 'A.6.2', skipMode: 'PROTOTYPE' }] }), true);
+  assert.equal(isPrototypeWorkflow({ phase2SkipMode: undefined }), false);
 });

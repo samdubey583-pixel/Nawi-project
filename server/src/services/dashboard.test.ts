@@ -4,11 +4,12 @@ import { buildDashboardReportView, dashboardAttention, dashboardCounts, dashboar
 
 test('dashboard categorizes canonical report statuses', () => {
   assert.equal(dashboardReportCategory({ status: 'SUBMITTED', stage: 'APPLICATION' }), 'IN_PROGRESS');
+  assert.equal(dashboardReportCategory({ status: 'AWAITING_REVIEW', stage: 'REVIEW' }), 'UNDER_REVIEW');
   assert.equal(dashboardReportCategory({ status: 'UNDER_REVIEW', stage: 'REVIEW' }), 'UNDER_REVIEW');
   assert.equal(dashboardReportCategory({ status: 'COMPLETED', stage: 'FINAL_REPORT' }), 'COMPLETED');
   assert.deepEqual(dashboardCounts([
     { status: 'SUBMITTED' }, { status: 'TESTING' }, { status: 'UNDER_REVIEW' }, { status: 'COMPLETED' }, { status: 'DRAFT' },
-  ]), { inProgressCount: 3, completedCount: 1, underReviewCount: 1 });
+  ]), { activeTests: 1, awaitingReview: 1, changesRequested: 0, completedReports: 1 });
 });
 
 test('dashboard session data is derived from report data', () => {
@@ -26,10 +27,16 @@ test('dashboard supports multiple reports and reviewer workflow states', () => {
     { testReportId: 'TR-E', status: 'CHANGES_REQUESTED', stage: 'REVIEW' },
     { testReportId: 'TR-F', status: 'RETEST_REQUIRED', stage: 'REVIEW' },
   ];
-  assert.deepEqual(dashboardCounts(reports), { inProgressCount: 2, completedCount: 1, underReviewCount: 1 });
+  assert.deepEqual(dashboardCounts(reports), { activeTests: 2, awaitingReview: 1, changesRequested: 1, completedReports: 1 });
   assert.deepEqual(dashboardWorkflowSummary(reports), { testing: 2, awaitingReview: 1, changesRequested: 1, retestRequired: 1, completed: 1 });
   assert.equal(dashboardReportCategory(reports[4]), 'ATTENTION');
   assert.equal(dashboardReportCategory(reports[5]), 'ATTENTION');
+});
+
+test('awaiting review reports open the read-only handoff route', () => {
+  const view = buildDashboardReportView({ testReportId: 'TR-REVIEW', status: 'AWAITING_REVIEW', stage: 'REVIEW' }, [], []);
+  assert.equal(view.resumePath, '/tester/reports/TR-REVIEW/review');
+  assert.equal(view.actionLabel, 'View Report');
 });
 
 test('dashboard resumes with the report number and exposes explicit configuration attention', () => {

@@ -1,6 +1,7 @@
 import { Schema, model } from 'mongoose';
 
 const equipmentSchema = new Schema({ equipmentName: { type: String, required: true, trim: true }, equipmentType: { type: String, required: true, trim: true }, identification: { type: String, required: true, trim: true }, calibrationTraceability: { type: String, default: '' }, notes: { type: String, default: '' } }, { _id: false });
+const auditEntrySchema = new Schema({ action: { type: String, required: true }, actorId: { type: Schema.Types.ObjectId, ref: 'User' }, actorNameSnapshot: { type: String, default: '' }, actorRole: { type: String, default: '' }, timestamp: { type: Date, default: Date.now }, metadata: { type: Schema.Types.Mixed, default: {} } }, { _id: false });
 
 const testReportSchema = new Schema({
   testReportId: { type: String, required: true, unique: true, index: true },
@@ -31,7 +32,7 @@ const testReportSchema = new Schema({
   testPreparation: { notes: String },
   testEquipment: { type: [equipmentSchema], default: [] },
   controlStage: { type: String, enum: ['TYPE_APPROVAL', 'VERIFICATION'], default: 'VERIFICATION' },
-  status: { type: String, enum: ['DRAFT', 'SUBMITTED', 'VERIFICATION_IN_PROGRESS', 'VERIFICATION_COMPLETED', 'TESTING', 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'RETEST_REQUIRED', 'REJECTED', 'CANCELLED', 'COMPLETED'], default: 'SUBMITTED' },
+  status: { type: String, enum: ['DRAFT', 'SUBMITTED', 'VERIFICATION_IN_PROGRESS', 'VERIFICATION_COMPLETED', 'TESTING', 'AWAITING_REVIEW', 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'RETEST_REQUIRED', 'REJECTED', 'CANCELLED', 'COMPLETED'], default: 'SUBMITTED' },
   stage: { type: String, enum: ['APPLICATION', 'VERIFICATION', 'TESTING', 'REVIEW', 'FINAL_REPORT'], default: 'APPLICATION' },
   submittedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   testerId: { type: Schema.Types.ObjectId, ref: 'User', index: true },
@@ -44,6 +45,13 @@ const testReportSchema = new Schema({
   submittedForReviewAt: Date,
   reviewedAt: Date,
   resubmittedAt: Date,
+  reviewDraftAt: Date,
+  reviewDraftBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  reviewDraftByName: { type: String, default: '' },
+  draftPdfGeneratedAt: Date,
+  draftPdfGeneratedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  draftPdfPrototype: { type: Boolean, default: false },
+  auditHistory: { type: [auditEntrySchema], default: [] },
 }, { timestamps: true, collection: 'testReports' });
 
 export const TestReport = model('TestReport', testReportSchema);

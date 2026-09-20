@@ -24,7 +24,7 @@ async function findReport(id: string) {
 
 r.get('/reports', async (_req: any, res, next) => {
   try {
-    const reports: any[] = await TestReport.find({ status: { $in: ['UNDER_REVIEW', 'CHANGES_REQUESTED', 'COMPLETED', 'REJECTED'] } }).sort({ updatedAt: -1 }).lean();
+    const reports: any[] = await TestReport.find({ status: { $in: ['AWAITING_REVIEW', 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'COMPLETED', 'REJECTED'] } }).sort({ updatedAt: -1 }).lean();
     res.json({ reports: reports.map(report => ({ id: String(report._id), report: { ...report, _id: undefined }, status: report.status, stage: report.stage, reportNumber: report.testReportId, instrument: report.instrument, tester: report.testerNameSnapshot, updatedAt: report.updatedAt, reviewComment: report.reviewComment || '' })) });
   } catch (e) { next(e); }
 });

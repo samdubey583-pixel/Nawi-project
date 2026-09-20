@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateInfluenceFactorsError, evaluateInfluenceFactors, temperaturePlan, voltageLimits, type InfluenceFactorSnapshot } from './influenceFactors.js';
+import { calculateInfluenceFactorsError, evaluateInfluenceFactors, influenceFactorsFingerprint, temperaturePlan, voltageLimits, type InfluenceFactorSnapshot } from './influenceFactors.js';
 import { calculateChangeoverError } from './weighingCalculations.js';
 
 const profile = (overrides: Partial<InfluenceFactorSnapshot> = {}): InfluenceFactorSnapshot => ({ accuracyClass: 'III', indicationType: 'Self-indicating', unit: 'g', min: 200, max: 30000, e: 10, d: 10, usesElectricPower: true, powerSourceType: 'AC_MAINS', nominalVoltage: 230, tiltConfiguration: true, mobileInstrument: false, portableRoadVehicleInstrument: false, specifiedMinimumTemperature: -10, specifiedMaximumTemperature: 40, ...overrides });
@@ -17,9 +17,21 @@ test('does not guess missing A.5 manufacturer or electrical configuration', () =
 });
 
 test('uses the official A.5.4 source-specific voltage branches', () => {
-  assert.deepEqual(voltageLimits(profile({ powerSourceType: 'AC_MAINS', nominalVoltage: 230 })), { supported: true, branch: 'A.5.4.1', lower: 195.5, upper: 253, formula: '0.85 Umin/Unom to 1.10 Umax/Unom', threePhase: false });
+  assert.deepEqual(voltageLimits(profile({ powerSourceType: 'AC_MAINS', nominalVoltage: 230 })), { supported: true, branch: 'A.5.4.1', reference: 230, lower: 195.5, upper: 253, formula: '0.85 Unom to 1.10 Unom', threePhase: false });
+  assert.deepEqual(voltageLimits(profile({ powerSourceType: 'AC_MAINS', nominalVoltage: 220 })), { supported: true, branch: 'A.5.4.1', reference: 220, lower: 187, upper: 242, formula: '0.85 Unom to 1.10 Unom', threePhase: false });
+  assert.deepEqual(voltageLimits(profile({ powerSourceType: 'AC_MAINS', nominalVoltage: 230, specifiedVoltageRange: { min: 207, max: 253 } })), { supported: true, branch: 'A.5.4.1', reference: 230, lower: 175.95, upper: 278.3, formula: '0.85 Umin to 1.10 Umax', threePhase: false });
   assert.equal(voltageLimits(profile({ powerSourceType: 'ROAD_VEHICLE_BATTERY_12V', minimumOperatingVoltage: 10, nominalVoltage: 12 })).upper, 16);
   assert.equal(voltageLimits(profile({ powerSourceType: 'ROAD_VEHICLE_BATTERY_24V', minimumOperatingVoltage: 20, nominalVoltage: 24 })).upper, 32);
+  assert.equal(voltageLimits(profile({ powerSourceType: 'EXTERNAL_AC_DC', nominalVoltage: 230, minimumOperatingVoltage: 195.5 })).branch, 'A.5.4.2');
+  assert.equal(voltageLimits(profile({ powerSourceType: 'AC_MAINS', nominalVoltage: undefined })).supported, false);
+  assert.equal(voltageLimits(profile({ powerSourceType: 'AC_MAINS', nominalVoltage: 230, specifiedVoltageRange: { min: 253 } })).supported, false);
+});
+
+test('treats an empty marked-voltage object as absent configuration', () => {
+  assert.equal(
+    influenceFactorsFingerprint(profile({ specifiedVoltageRange: {} })),
+    influenceFactorsFingerprint(profile()),
+  );
 });
 
 test('temperature targets include 5 °C only when the specified low is at or below zero', () => {

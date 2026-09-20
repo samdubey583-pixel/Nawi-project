@@ -92,7 +92,7 @@ function statusFor(reports: any[], performanceByReport: Map<string, any>) {
   const latestPerformance = latest ? performanceByReport.get(String(latest._id)) : undefined;
   if (latestPerformance?.result === 'PASS') return { status: 'Passed', activeReportId: undefined };
   if (latestPerformance?.result === 'FAIL') return { status: 'Issues Found', activeReportId: undefined };
-  if (latest?.status === 'UNDER_REVIEW') return { status: 'Needs Review', activeReportId: undefined };
+  if (latest?.status === 'UNDER_REVIEW' || latest?.status === 'AWAITING_REVIEW') return { status: 'Needs Review', activeReportId: undefined };
   return { status: 'Not Tested', activeReportId: undefined };
 }
 

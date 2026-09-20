@@ -4,6 +4,7 @@ import { applicationMetadataValidationMessage, canEditReportMetadata, normalizeI
 
 test('editable report states follow the existing workflow lock', () => {
   assert.equal(canEditReportMetadata({ status: 'TESTING', stage: 'TESTING' }), true);
+  assert.equal(canEditReportMetadata({ status: 'AWAITING_REVIEW', stage: 'REVIEW' }), false);
   assert.equal(canEditReportMetadata({ status: 'UNDER_REVIEW', stage: 'REVIEW' }), false);
   assert.equal(canEditReportMetadata({ status: 'COMPLETED', stage: 'FINAL_REPORT' }), false);
 });

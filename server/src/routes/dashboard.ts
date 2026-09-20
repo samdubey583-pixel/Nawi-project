@@ -71,7 +71,9 @@ r.get('/', async (req: any, res, next) => {
       const key = String((report as any).instrumentId || '');
       if (key && !latestReportByInstrument.has(key)) latestReportByInstrument.set(key, report);
     }
-    const activeReports = views.filter(view => view.category === 'IN_PROGRESS');
+    const activeReports = views.filter(view => view.category === 'IN_PROGRESS' || view.category === 'ATTENTION');
+    const awaitingReview = views.filter(view => view.category === 'UNDER_REVIEW');
+    const recentCompleted = views.filter(view => view.category === 'COMPLETED').slice(0, 10);
     const recentSessions = views.slice(0, 10).map(view => ({ ...view, lastActivity: view.date }));
     const instrumentSnapshot = instruments.slice(0, 4).map(instrument => instrumentSummary(instrument, latestReportByInstrument.get(String(instrument._id))));
     const firstActive = activeReports.find(view => view.category === 'IN_PROGRESS') || activeReports[0] || null;
@@ -90,6 +92,8 @@ r.get('/', async (req: any, res, next) => {
       ...counts,
       workflowSummary,
       activeReports,
+      awaitingReview,
+      recentCompleted,
       attentionItems,
       history: recentSessions,
       recentActivity: recentSessions,

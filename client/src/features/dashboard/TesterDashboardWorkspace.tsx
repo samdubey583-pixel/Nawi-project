@@ -33,6 +33,8 @@ export default function TesterDashboardWorkspace({ user }: TesterDashboardWorksp
   if (error && !data) return <main className="dashboard dashboard-state"><div className="dashboard-error" role="alert"><AlertTriangle size={18} /><div><strong>Dashboard unavailable</strong><p>{error}</p><button className="secondary" onClick={() => void load()}>Try again</button></div></div></main>;
 
   const activeReports = data?.activeReports || [];
+  const awaitingReports = data?.awaitingReview || [];
+  const recentCompleted = data?.recentCompleted || [];
   const attentionItems = data?.attentionItems || [];
   const sessions = data?.history || data?.recentActivity || data?.recentSessions || [];
   const instruments = data?.instrumentSnapshot || [];
@@ -50,9 +52,10 @@ export default function TesterDashboardWorkspace({ user }: TesterDashboardWorksp
 
     <section className="stats" aria-label="Live summary">
       <DashboardStat icon={<Weight />} label="Instruments" value={stat('instrumentsCount')} />
-      <DashboardStat icon={<ClipboardCheck />} label="In Progress" value={stat('inProgressCount')} />
-      <DashboardStat icon={<FileText />} label="Completed" value={stat('completedCount')} />
-      <DashboardStat icon={<Search />} label="Under Review" value={stat('underReviewCount')} />
+      <DashboardStat icon={<ClipboardCheck />} label="Active Tests" value={stat('activeTests')} />
+      <DashboardStat icon={<Search />} label="Awaiting Review" value={stat('awaitingReview')} />
+      <DashboardStat icon={<AlertTriangle />} label="Changes Requested" value={stat('changesRequested')} />
+      <DashboardStat icon={<FileText />} label="Completed Reports" value={stat('completedReports')} />
     </section>
 
     <div className="dashboard-grid dashboard-operational-grid">
@@ -61,6 +64,16 @@ export default function TesterDashboardWorkspace({ user }: TesterDashboardWorksp
         {activeReports.length ? <div className="dashboard-report-list">{activeReports.slice(0, 6).map((item: any) => <DashboardReportRow item={item} key={item.reportId} />)}</div> : <DashboardEmpty icon={<ClipboardCheck />} title="No active verifications" copy="New and in-progress reports will appear here." action="New Test Report" to="/tester/new-report" />}
         {activeReports.length > 6 && <Link className="dashboard-more" to="/tester/reports">View all active reports <ArrowRight size={15} /></Link>}
       </section>
+
+      <section className="section-card wide dashboard-section">
+        <div className="section-heading"><div><span className="dashboard-kicker">SUBMITTED REPORTS</span><h2>Awaiting Review</h2></div><Link to="/tester/reports">View reports <ArrowRight /></Link></div>
+        {awaitingReports.length ? <div className="dashboard-report-list">{awaitingReports.slice(0, 6).map((item: any) => <DashboardReportRow item={item} key={item.reportId} />)}</div> : <DashboardEmpty icon={<Search />} title="No reports awaiting review" copy="Submitted reports will appear here while the authority review is pending." action="View Reports" to="/tester/reports" />}
+      </section>
+
+      {recentCompleted.length > 0 && <section className="section-card dashboard-section">
+        <div className="section-heading"><div><span className="dashboard-kicker">REPORT RECORDS</span><h2>Recent Completed Reports</h2></div></div>
+        <div className="dashboard-session-list">{recentCompleted.slice(0, 5).map((item: any) => <Link className="dashboard-session" to={item.resumePath || `/tester/reports/${item.reportId}/review`} key={item.reportId}><span className="dashboard-row-icon"><FileText size={18} /></span><span><b>{item.reportId}</b><strong>{item.instrument} · {item.currentTest?.code || item.stage}</strong><small>{statusLabel(item.status)} · {dateLabel(item.date)}</small></span><ChevronRight size={16} /></Link>)}</div>
+      </section>}
 
       {attentionItems.length > 0 && <section className="section-card wide dashboard-section attention-section">
         <div className="section-heading"><div><span className="dashboard-kicker">ACTION QUEUE</span><h2>Requires Immediate Attention</h2></div><AlertTriangle size={18} /></div>

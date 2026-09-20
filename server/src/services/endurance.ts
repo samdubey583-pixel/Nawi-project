@@ -8,6 +8,7 @@ export const ENDURANCE_RULE_SET = 'oiml-r76-annex-a6-v1';
 export const ENDURANCE_SOURCE = 'OIML R 76-1:2006 §3.9.4.3 / Annex A A.6';
 export const ENDURANCE_TARGET_CYCLES = 100000;
 export const ENDURANCE_CHECKPOINTS = [0, 10000, 25000, 50000, 75000, 100000] as const;
+export const SYNTHETIC_BATCH_SIZES = [1, 10, 100, 1000, 10000] as const;
 
 const normalizeClass = (value: unknown) => String(value || '').replace(/^Class\s*/i, '').trim().toUpperCase();
 const precision = (value: number) => Number(value.toFixed(12));
@@ -80,6 +81,19 @@ export function assessDurability(input: { preError: number; postError: number; l
 export function nextCycleCount(current: number, increment = 1, target = ENDURANCE_TARGET_CYCLES) {
   if (!Number.isInteger(current) || !Number.isInteger(increment) || current < 0 || increment <= 0 || current + increment > target) throw new Error(`Cycle count must remain between 0 and ${target}.`);
   return current + increment;
+}
+
+export function isSyntheticBatchSize(value: number): value is typeof SYNTHETIC_BATCH_SIZES[number] {
+  return SYNTHETIC_BATCH_SIZES.includes(value as typeof SYNTHETIC_BATCH_SIZES[number]);
+}
+
+export function isPrototypeWorkflow(test: { phase2SkipMode?: unknown; phases?: Array<{ code?: unknown; skipMode?: unknown }> } | null | undefined) {
+  return test?.phase2SkipMode === 'PROTOTYPE' || test?.phases?.some(phase => phase.code === 'A.6.2' && phase.skipMode === 'PROTOTYPE') === true;
+}
+
+export function canSkipPhaseTwoForPrototype(input: { completedCycles?: number; targetCycles?: number; syntheticCycles?: number }) {
+  const target = Number(input.targetCycles || ENDURANCE_TARGET_CYCLES);
+  return Number(input.syntheticCycles || 0) > 0 && Number(input.completedCycles || 0) === target;
 }
 
 export function enduranceFingerprint(snapshot: EnduranceSnapshot) { return JSON.stringify(snapshot); }

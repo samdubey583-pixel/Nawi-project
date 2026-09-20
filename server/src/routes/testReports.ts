@@ -5,6 +5,7 @@ import { TestReport } from '../models/TestReport.js';
 import { Counter } from '../models/Counter.js';
 import { VerificationSession, CHECKLIST_ITEMS, MVP_VERIFICATION_SECTIONS } from '../models/VerificationSession.js';
 import { Evidence } from '../models/Evidence.js';
+import { ReportMessage } from '../models/ReportMessage.js';
 import crypto from 'node:crypto';
 import { WeighingPerformanceTest } from '../models/WeighingPerformanceTest.js';
 import { generateRecommendedLoadPlan, getMpe, RULE_VERSION } from '../services/mpeRules.js';
@@ -13,6 +14,7 @@ import { generateApplicability, instrumentProfileFromRecord } from '../services/
 import { convertMass, isMassUnit, type MassUnit } from '../services/mass.js';
 import { Instrument } from '../models/Instrument.js';
 import { calculateChangeoverError, calculateZeroError } from '../services/weighingCalculations.js';
+import { calculateZeroSettingStabilityObservation } from '../services/stabilityOfEquilibrium.js';
 import { ZeroCheckingTest } from '../models/ZeroCheckingTest.js';
 import { ZeroSettingBeforeLoadingTest } from '../models/ZeroSettingBeforeLoadingTest.js';
 import { sourceFingerprint, sourcePhaseFromTest, sourcePhaseIsComplete } from '../services/zeroSettingBeforeLoading.js';
@@ -35,12 +37,14 @@ import { calculateRepeatabilityObservation, evaluateRepeatabilityResults, getRep
 import { VariationWithTimeTest } from '../models/VariationWithTimeTest.js';
 import { StabilityOfEquilibriumTest } from '../models/StabilityOfEquilibriumTest.js';
 import { calculateCreepP, calculateVariationMpe, CREEP_CHECKPOINTS, evaluateCreep, evaluateZeroReturn, isValidCreepCheckpoint, variationWithTimeFingerprint, variationWithTimePlan, VARIATION_WITH_TIME_ENGINE_VERSION, VARIATION_WITH_TIME_SOURCE, VARIATION_WITH_TIME_TEST_VERSION, type VariationWithTimeCheckpoint } from '../services/variationWithTime.js';
-import { evaluateDocumentationReview, evaluateInhibition, evaluateStabilitySequence, stabilityFingerprint, stabilityPlan, STABILITY_ENGINE_VERSION, STABILITY_REPETITIONS, STABILITY_RULE_SET, STABILITY_SOURCE, STABILITY_TEST_VERSION, normalizeMass, type StabilityOperation } from '../services/stabilityOfEquilibrium.js';
+import { consolidateDocumentationDetails, evaluateContinuousDisturbance, evaluateDocumentationReview, evaluatePrintStorageRepetition, evaluateStabilityRepetitions, stabilityFingerprint, stabilityPlan, STABILITY_ENGINE_VERSION, STABILITY_REPETITIONS, STABILITY_RULE_SET, STABILITY_SOURCE, STABILITY_TEST_VERSION, normalizeMass, type StabilityOperation } from '../services/stabilityOfEquilibrium.js';
 import { testerReportAccessFilter, hasTesterReportAccess } from '../services/reportAccess.js';
 import { InfluenceFactorsTest } from '../models/InfluenceFactorsTest.js';
 import { evaluateInfluenceFactors, influenceFactorsFingerprint, influenceFactorsPlan, calculateInfluenceFactorsError, evaluateInfluenceFactorsCompliance, INFLUENCE_FACTORS_ENGINE_VERSION, INFLUENCE_FACTORS_RULE_SET, INFLUENCE_FACTORS_SOURCE, INFLUENCE_FACTORS_TEST_VERSION } from '../services/influenceFactors.js';
 import { EnduranceTest } from '../models/EnduranceTest.js';
-import { assessDurability, calculateEnduranceWeighing, enduranceApplicability, enduranceFingerprint, endurancePlan, ENDURANCE_CHECKPOINTS, ENDURANCE_ENGINE_VERSION, ENDURANCE_RULE_SET, ENDURANCE_SOURCE, ENDURANCE_TARGET_CYCLES, ENDURANCE_TEST_VERSION, nextCycleCount } from '../services/endurance.js';
+import { buildDraftReportPdf } from '../services/reportPdf.js';
+import { deriveOverallResult } from '../services/reportReview.js';
+import { assessDurability, calculateEnduranceWeighing, canSkipPhaseTwoForPrototype, enduranceApplicability, enduranceFingerprint, endurancePlan, ENDURANCE_CHECKPOINTS, ENDURANCE_ENGINE_VERSION, ENDURANCE_RULE_SET, ENDURANCE_SOURCE, ENDURANCE_TARGET_CYCLES, ENDURANCE_TEST_VERSION, isPrototypeWorkflow, isSyntheticBatchSize, nextCycleCount } from '../services/endurance.js';
 import { applicationMetadataValidationMessage, canEditReportMetadata, normalizeIndianPhone } from '../services/reportMetadata.js';
 import { deriveZeroIndicatorIncrement, validateSignedZeroRanges, validateZeroIndicatorObservations, type ZeroIndicatorObservationInput } from '../services/zeroIndicatorObservations.js';
 import { requiredEvidenceTestIds } from '../services/evidenceDefinitions.js';
@@ -151,6 +155,18 @@ async function nextApp() {
 }
 
 r.use(requireAuth, requireRole('TESTER'));
+r.use('/:id', async (req: any, res, next) => {
+  if (!['POST', 'PATCH', 'DELETE'].includes(req.method) || req.path.startsWith('/review/')) return next();
+  try {
+    const identifier = String(req.params.id);
+    const lookup = /^[a-f\d]{24}$/i.test(identifier) ? { _id: identifier } : { testReportId: identifier };
+    const report: any = await TestReport.findOne({ ...lookup, ...testerReportAccessFilter(req.user._id) }).select('status');
+    if (report && ['AWAITING_REVIEW', 'UNDER_REVIEW', 'COMPLETED'].includes(String(report.status))) {
+      return res.status(409).json({ message: 'This report is read-only while it is awaiting review.', code: 'REPORT_READ_ONLY' });
+    }
+    return next();
+  } catch (error) { return next(error); }
+});
 r.post('/application-number', async (_, res, next) => { try { res.json({ applicationNumber: await nextApp() }); } catch (e) { next(e); } });
 r.get('/', async (req, res, next) => { try { const userId = (req as any).user._id; res.json({ reports: await TestReport.find({ $or: [{ submittedBy: userId }, { testerId: userId }] }).select('-_id -submittedBy').sort({ createdAt: -1 }) }); } catch (e) { next(e); } });
 r.get('/:id', async (req: any, res, next) => { try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const value: any = report.toObject(); delete value._id; delete value.submittedBy; res.json({ report: value }); } catch (e) { next(e); } });
@@ -1561,20 +1577,21 @@ const stabilityPrerequisitesComplete = async (report: any, route: any) => {
   return prerequisites.every((item: any) => completed[item.code] === true);
 };
 
-const sourceEvidence = async (report: any, sourcePhase: 'A.4.2.3' | 'A.4.6.2') => {
-  if (sourcePhase === 'A.4.2.3') {
-    const source: any = await ZeroCheckingTest.findOne({ reportId: report._id });
-    const phase: any = source?.phases?.find((item: any) => item.code === sourcePhase);
-    return phase?.status === 'COMPLETED' ? { testId: String(source._id), phaseCode: sourcePhase, result: phase.result, observations: phase.observations, calculations: phase.calculations } : null;
-  }
-  const source: any = await TareTest.findOne({ reportId: report._id });
-  const phase: any = source?.phases?.find((item: any) => item.code === sourcePhase);
-  return phase?.status === 'COMPLETED' ? { testId: String(source._id), phaseCode: sourcePhase, result: phase.result, observations: phase.observations, calculations: phase.calculations } : null;
-};
-
 const activateNextStabilityPhase = (test: any) => {
   const next = test.phases.find((item: any) => item.applicability === 'APPLICABLE' && item.status === 'LOCKED');
   if (next) next.status = 'AVAILABLE';
+};
+
+const stabilityMutable = (test: any) => {
+  if (test?.status === 'COMPLETED') return { message: 'A.4.12 is completed and read-only.', code: 'COMPLETED_LOCKED' };
+  if (test?.status === 'REVALIDATION_REQUIRED') return { message: 'Revalidation is required before editing A.4.12.', code: 'REVALIDATION_REQUIRED' };
+  return null;
+};
+
+const stabilityLoadL0 = (snapshot: any) => {
+  const e = Number(snapshot?.e);
+  const automatic = String(snapshot?.zeroSettingMethod || '').toLowerCase() === 'automatic' || snapshot?.zeroTracking === true;
+  return Number.isFinite(e) && e > 0 && automatic ? 10 * e : 0;
 };
 
 r.get('/:id/stability-of-equilibrium', async (req: any, res, next) => {
@@ -1603,34 +1620,69 @@ r.post('/:id/stability-of-equilibrium/start', async (req: any, res, next) => {
 });
 
 r.patch('/:id/stability-of-equilibrium/documentation', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); if (test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'Revalidation is required before editing this test.', code: 'REVALIDATION_REQUIRED' }); const body = z.object({
-    stableEquilibriumPrinciple: text, stableEquilibriumCriterion: text, adjustableParameters: text, nonAdjustableParameters: text, parameterSecurityMethod: text, worstCaseAdjustment: text,
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); const locked = stabilityMutable(test); if (locked) return res.status(409).json(locked); const body = z.object({
+    manufacturerDocumentationDetails: text,
     documentationAvailable: z.enum(['Yes', 'No']), basicPrincipleDocumented: z.enum(['Yes', 'No']), criteriaDocumented: z.enum(['Yes', 'No']), adjustableParametersDocumented: z.enum(['Yes', 'No', 'Not applicable']), nonAdjustableParametersDocumented: z.enum(['Yes', 'No', 'Not applicable']), parameterSecurityDocumented: z.enum(['Yes', 'No', 'Not applicable']), worstCaseAdjustmentIdentified: z.enum(['Yes', 'No', 'Not applicable']),
     manufacturerDocumentationReference: z.string().optional().default(''), evidenceReference: z.string().optional().default('')
-  }).parse(req.body); test.documentation = { ...body, reviewedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.1'); phase.status = 'COMPLETED'; phase.result = evaluateDocumentationReview(body); phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_DOCUMENTATION_REVIEWED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: phase.result } }); test.markModified('documentation'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
+  }).parse(req.body); const documentation = { ...body, manufacturerDocumentationDetails: consolidateDocumentationDetails(body), reviewedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; test.documentation = documentation; const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.1'); phase.status = 'COMPLETED'; phase.result = evaluateDocumentationReview(documentation); phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_DOCUMENTATION_REVIEWED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: phase.result } }); test.markModified('documentation'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
 });
 
 r.patch('/:id/stability-of-equilibrium/setup', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); const body = z.object({ actualLoad: z.number().finite().nonnegative(), actualLoadUnit: z.enum(['mg', 'g', 'kg', 't']), notes: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const actualLoad = normalizeMass(body.actualLoad, body.actualLoadUnit, unit); if (actualLoad > Number(snapshot.max)) return res.status(400).json({ message: 'Actual test load must not exceed Max.' }); test.setup = { targetLoad: test.plan?.targetLoad, actualLoad: { value: actualLoad, unit }, inputActualLoad: body.actualLoad, inputUnit: body.actualLoadUnit, notes: body.notes, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; test.events.push({ action: 'STABILITY_SETUP_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date() }); test.markModified('setup'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); const locked = stabilityMutable(test); if (locked) return res.status(409).json(locked); const body = z.object({ actualLoad: z.number().finite().nonnegative(), actualLoadUnit: z.enum(['mg', 'g', 'kg', 't']), notes: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const actualLoad = normalizeMass(body.actualLoad, body.actualLoadUnit, unit); if (actualLoad > Number(snapshot.max)) return res.status(400).json({ message: 'Actual test load must not exceed Max.' }); test.setup = { targetLoad: test.plan?.targetLoad, actualLoad: { value: actualLoad, unit }, inputActualLoad: body.actualLoad, inputUnit: body.actualLoadUnit, notes: body.notes, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; test.events.push({ action: 'STABILITY_SETUP_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date() }); test.markModified('setup'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
 });
 
 r.patch('/:id/stability-of-equilibrium/print-storage/start', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test || !test.setup) return res.status(409).json({ message: 'Record the actual stability-test load first.' }); if (!test.documentation) return res.status(409).json({ message: 'Complete the documentation review first.' }); const branch: any = test.phases.find((item: any) => item.code === 'A.4.12.2'); if (!branch || branch.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'Printing/data-storage stability is not applicable.', code: 'NOT_APPLICABLE' }); const body = z.object({ functionTested: z.enum(['PRINT', 'STORE']), disturbanceConfirmed: z.literal(true), initiatedImmediatelyConfirmed: z.literal(true) }).parse(req.body); const now = new Date(); test.printStorage = { ...((test.printStorage as any)?.toObject?.() || test.printStorage || {}), functionTested: body.functionTested, disturbanceConfirmed: true, initiatedImmediatelyConfirmed: true, commandStartedAt: now, observationStartAt: now, status: 'IN_PROGRESS', testerId: req.user._id, testerNameSnapshot: userName(req.user) }; branch.status = 'IN_PROGRESS'; test.events.push({ action: 'STABILITY_PRINT_STORAGE_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { functionTested: body.functionTested } }); test.markModified('printStorage'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test) }); } catch (e) { next(e); }
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test || !test.setup) return res.status(409).json({ message: 'Record the actual stability-test load first.' });
+    const locked = stabilityMutable(test); if (locked) return res.status(409).json(locked);
+    if (!test.documentation || evaluateDocumentationReview(test.documentation) === 'INCOMPLETE') return res.status(409).json({ message: 'Complete the documentation review first.' });
+    const branch: any = test.phases.find((item: any) => item.code === 'A.4.12.2'); if (!branch || branch.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'Printing/data-storage stability is not applicable.', code: 'NOT_APPLICABLE' });
+    const body = z.object({ repetition: z.number().int().min(1).max(STABILITY_REPETITIONS), functionTested: z.enum(['PRINT', 'STORE']), disturbanceConfirmed: z.literal(true), initiatedImmediatelyConfirmed: z.literal(true) }).parse(req.body);
+    const repetitions: any[] = test.printStorage?.repetitions || [];
+    const expected = repetitions.length + 1;
+    if (body.repetition !== expected) return res.status(409).json({ message: `Record print/storage repetition ${expected} next.`, code: 'REPETITION_SEQUENCE' });
+    if (test.printStorage?.status === 'IN_PROGRESS') return res.status(409).json({ message: 'Finish the active five-second observation first.' });
+    const now = new Date();
+    test.printStorage = { ...((test.printStorage as any)?.toObject?.() || test.printStorage || {}), repetitions, currentRepetition: body.repetition, functionTested: body.functionTested, disturbanceConfirmed: true, initiatedImmediatelyConfirmed: true, commandStartedAt: now, observationStartAt: now, status: 'IN_PROGRESS', testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    branch.status = 'IN_PROGRESS';
+    test.events.push({ action: 'STABILITY_PRINT_STORAGE_STARTED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { functionTested: body.functionTested, repetition: body.repetition } });
+    test.markModified('printStorage'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test) });
+  } catch (e) { next(e); }
 });
 
 r.patch('/:id/stability-of-equilibrium/print-storage/complete', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test?.printStorage || test.printStorage.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Start the five-second print/data-storage observation first.' }); if (Date.now() - new Date(test.printStorage.commandStartedAt).getTime() < 5000) return res.status(409).json({ message: 'The five-second observation period is not complete yet.', code: 'OBSERVATION_NOT_DUE' }); const body = z.object({ printedValue: z.number().finite(), printedValueUnit: z.enum(['mg', 'g', 'kg', 't']), observedValues: z.array(z.number().finite()).min(1), observedValueUnit: z.enum(['mg', 'g', 'kg', 't']), evidence: z.string().optional().default('') }).parse(req.body); const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const printedValue = normalizeMass(body.printedValue, body.printedValueUnit, unit); const observedValues = body.observedValues.map(value => normalizeMass(value, body.observedValueUnit, unit)); const interval = test.plan?.stabilityInterval?.value; if (!Number.isFinite(interval)) return res.status(409).json({ message: 'The configured d/e stability interval is unavailable.', code: 'CONFIGURATION_REQUIRED' }); const evaluated = evaluateStabilitySequence({ values: observedValues, printedValue, interval: Number(interval) }); const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.2'); test.printStorage = { ...((test.printStorage as any)?.toObject?.() || test.printStorage || {}), printedValue: { value: printedValue, unit }, inputPrintedValue: body.printedValue, printedValueUnit: body.printedValueUnit, observedValues: observedValues.map(value => ({ value, unit })), inputObservedValues: body.observedValues, observedValueUnit: body.observedValueUnit, observationEndAt: new Date(), stabilityInterval: test.plan.stabilityInterval, evaluation: evaluated, evidence: body.evidence, result: evaluated.result, status: 'COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user) }; phase.status = 'COMPLETED'; phase.result = evaluated.result; phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_PRINT_STORAGE_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluated.result } }); test.markModified('printStorage'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test), evaluation: evaluated }); } catch (e) { next(e); }
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); const locked = stabilityMutable(test); if (locked) return res.status(409).json(locked);
+    if (!test?.printStorage || test.printStorage.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Start the five-second print/data-storage observation first.' });
+    if (Date.now() - new Date(test.printStorage.commandStartedAt).getTime() < 5000) return res.status(409).json({ message: 'The five-second observation period is not complete yet.', code: 'OBSERVATION_NOT_DUE' });
+    const body = z.object({ repetition: z.number().int().min(1).max(STABILITY_REPETITIONS), printedValue: z.number().finite(), printedValueUnit: z.enum(['mg', 'g', 'kg', 't']), observedValues: z.array(z.number().finite()).min(1), observedValueUnit: z.enum(['mg', 'g', 'kg', 't']), evidence: z.string().optional().default('') }).parse(req.body);
+    if (body.repetition !== test.printStorage.currentRepetition) return res.status(409).json({ message: 'The submitted repetition does not match the active observation.' });
+    const snapshot: any = test.instrumentSnapshot || {}; const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+    const printedValue = normalizeMass(body.printedValue, body.printedValueUnit, unit); const observedValues = body.observedValues.map(value => normalizeMass(value, body.observedValueUnit, unit));
+    const interval = test.plan?.printStorageInterval?.value ?? snapshot.e; if (!Number.isFinite(interval)) return res.status(409).json({ message: 'The configured e stability interval is unavailable.', code: 'CONFIGURATION_REQUIRED' });
+    const evaluated = evaluatePrintStorageRepetition({ values: observedValues, printedValue, interval: Number(interval) });
+    const repetitions = [...(test.printStorage.repetitions || []).filter((item: any) => item.repetition !== body.repetition), { repetition: body.repetition, functionTested: test.printStorage.functionTested, printedValue: { value: printedValue, unit }, inputPrintedValue: body.printedValue, printedValueUnit: body.printedValueUnit, observedValues: observedValues.map(value => ({ value, unit })), inputObservedValues: body.observedValues, observedValueUnit: body.observedValueUnit, minimumValue: evaluated.minimumValue, maximumValue: evaluated.maximumValue, evaluation: evaluated, observationEndAt: new Date(), result: evaluated.result, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }].sort((a: any, b: any) => a.repetition - b.repetition);
+    const repetitionSummary = evaluateStabilityRepetitions(repetitions);
+    const complete = repetitionSummary.complete;
+    const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.2');
+    test.printStorage = { ...((test.printStorage as any)?.toObject?.() || test.printStorage || {}), repetitions, requiredRepetitions: STABILITY_REPETITIONS, currentRepetition: undefined, commandStartedAt: undefined, observationStartAt: undefined, status: complete ? 'COMPLETED' : 'AVAILABLE', result: repetitionSummary.result, stabilityInterval: { value: Number(interval), unit, kind: '1e' }, evidence: body.evidence };
+    phase.status = complete ? 'COMPLETED' : 'AVAILABLE'; phase.result = test.printStorage.result; if (complete) phase.completedAt = new Date(); activateNextStabilityPhase(test);
+    test.events.push({ action: 'STABILITY_PRINT_STORAGE_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluated.result, repetition: body.repetition } });
+    test.markModified('printStorage'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test), evaluation: evaluated });
+  } catch (e) { next(e); }
 });
 
-async function saveStabilityRepetition(req: any, res: any, sourcePhase: 'A.4.2.3' | 'A.4.6.2', branchCode: 'A.4.12.3' | 'A.4.12.4') {
+async function saveStabilityRepetition(req: any, res: any, branchCode: 'A.4.12.3' | 'A.4.12.4') {
   const report = await getOwnedReport(req);
   if (!report) return res.status(404).json({ message: 'Test report not found.' });
   const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id });
   if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' });
+  const locked = stabilityMutable(test); if (locked) return res.status(409).json(locked);
   const branch: any = test.phases.find((item: any) => item.code === branchCode);
   if (!branch || branch.applicability !== 'APPLICABLE') return res.status(409).json({ message: 'This stability branch is not applicable.', code: 'NOT_APPLICABLE' });
-  const source = await sourceEvidence(report, sourcePhase);
-  if (!source) return res.status(409).json({ message: `Complete ${sourcePhase} before recording this stability branch.`, code: 'SOURCE_EVIDENCE_REQUIRED' });
+  if (branch.status !== 'AVAILABLE' && branch.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Complete the previous A.4.12 branch first.', code: 'BRANCH_SEQUENCE' });
   const body = z.object({
     repetition: z.number().int().min(1).max(STABILITY_REPETITIONS),
     disturbanceConfirmed: z.literal(true),
@@ -1638,48 +1690,56 @@ async function saveStabilityRepetition(req: any, res: any, sourcePhase: 'A.4.2.3
     blockedBeforeStable: z.literal(true),
     stableAfterConfirmed: z.literal(true),
     zeroTrackingOffConfirmed: z.literal(true),
+    unit: z.enum(['mg', 'g', 'kg', 't']),
+    // A.4.12.3 uses the R76-2 zero-setting form. The legacy fields remain
+    // optional so old records can still be read, but new zero-setting saves
+    // must provide the canonical fields below.
+    zeroLoad: z.number().finite().min(0).optional(),
+    zeroIndicationI0: z.number().finite().optional(), deltaL0: z.number().finite().min(0).optional(), loadL: z.number().finite().min(0).optional(), indicationI: z.number().finite().optional(), deltaL: z.number().finite().min(0).optional(),
+    tareLoad: z.number().finite().min(0).optional(), indicationI0: z.number().finite().optional(),
     notes: z.string().optional().default(''),
     complete: z.boolean().optional().default(true),
   }).parse(req.body);
+  const snapshot: any = test.instrumentSnapshot || {}; const instrumentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g'; const unit = body.unit;
+  const e = Number(snapshot.e); if (!Number.isFinite(e) || e <= 0) return res.status(409).json({ message: 'The configured e interval is unavailable.', code: 'CONFIGURATION_REQUIRED' });
+  let observation: any;
+  if (branchCode === 'A.4.12.3') {
+    if ([body.zeroLoad, body.indicationI0, body.deltaL].some(value => value === undefined)) return res.status(400).json({ message: 'Record zero-load, indication I₀, and additional load ΔL for this zero-setting repetition.' });
+    const zeroLoad = normalizeMass(body.zeroLoad!, unit, instrumentUnit); const indicationI0 = normalizeMass(body.indicationI0!, unit, instrumentUnit); const deltaL = normalizeMass(body.deltaL!, unit, instrumentUnit);
+    const loadL0 = body.zeroTrackingOffConfirmed ? 0 : stabilityLoadL0(snapshot);
+    const calculation = calculateZeroSettingStabilityObservation({ zeroLoad, loadL0, indicationI0, deltaL, e });
+    observation = { ...body, repetition: body.repetition, unit: instrumentUnit, inputUnit: unit, inputZeroLoad: body.zeroLoad, inputIndicationI0: body.indicationI0, inputDeltaL: body.deltaL, zeroLoad, loadL0, indicationI0, deltaL, calculatedE0: calculation.errorE0, accuracyLimit: calculation.accuracyLimit, result: calculation.result, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+  } else {
+    if ([body.tareLoad, body.indicationI0, body.deltaL].some(value => value === undefined)) return res.status(400).json({ message: 'Record tare load, indication I₀, and ΔL for this tare-balancing repetition.' });
+    const tareLoad = normalizeMass(body.tareLoad!, unit, instrumentUnit); const indicationI0 = normalizeMass(body.indicationI0!, unit, instrumentUnit); const deltaL = normalizeMass(body.deltaL!, unit, instrumentUnit); const loadL0 = stabilityLoadL0(snapshot); const calculation = calculateTareSettingObservation({ tareLoad, loadL0, indicationI0, deltaL, e });
+    observation = { ...body, repetition: body.repetition, unit: instrumentUnit, inputUnit: unit, inputTareLoad: body.tareLoad, inputIndicationI0: body.indicationI0, inputDeltaL: body.deltaL, tareLoad, loadL0, indicationI0, deltaL, errorE0: calculation.errorE0, accuracyLimit: calculation.accuracyLimit, result: calculation.result, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+  }
   const existing: any[] = branch.observations || [];
-  const observation = {
-    repetition: body.repetition,
-    disturbanceConfirmed: true,
-    operationAttemptedImmediately: true,
-    blockedBeforeStable: true,
-    stableAfterConfirmed: true,
-    zeroTrackingOffConfirmed: true,
-    sourceTestId: source.testId,
-    sourcePhase,
-    sourceResult: source.result,
-    sourceCalculations: source.calculations,
-    notes: body.notes,
-    recordedAt: new Date(),
-    testerId: req.user._id,
-    testerNameSnapshot: userName(req.user),
-  };
+  const expected = existing.length + 1;
+  if (body.repetition !== expected && !existing.some(item => item.repetition === body.repetition)) return res.status(409).json({ message: `Record repetition ${expected} next.`, code: 'REPETITION_SEQUENCE' });
   branch.observations = [...existing.filter(item => item.repetition !== body.repetition), observation].sort((a, b) => a.repetition - b.repetition);
-  branch.status = branch.observations.length === STABILITY_REPETITIONS && body.complete ? 'COMPLETED' : 'IN_PROGRESS';
-  branch.result = branch.status === 'COMPLETED' ? 'PASS' : 'INCOMPLETE';
+  const repetitionSummary = evaluateStabilityRepetitions(branch.observations);
+  branch.status = repetitionSummary.complete && body.complete ? 'COMPLETED' : 'IN_PROGRESS';
+  branch.result = repetitionSummary.result;
   if (branch.status === 'COMPLETED') branch.completedAt = new Date();
   activateNextStabilityPhase(test);
-  test[branchCode === 'A.4.12.3' ? 'zeroSetting' : 'tare'] = { repetitions: branch.observations, sourceEvidence: source, requiredRepetitions: STABILITY_REPETITIONS, result: branch.result };
-  test.events.push({ action: 'STABILITY_REPETITION_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { branchCode, repetition: body.repetition, sourcePhase } });
+  test[branchCode === 'A.4.12.3' ? 'zeroSetting' : 'tare'] = { repetitions: branch.observations, requiredRepetitions: STABILITY_REPETITIONS, result: branch.result };
+  test.events.push({ action: 'STABILITY_REPETITION_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { branchCode, repetition: body.repetition } });
   test.markModified('phases');
   test.markModified(branchCode === 'A.4.12.3' ? 'zeroSetting' : 'tare');
   await test.save();
   return res.json({ test: publicStability(test), branch });
 }
 
-r.patch('/:id/stability-of-equilibrium/zero-setting/repetitions/:repetition', async (req: any, res, next) => { try { req.body.repetition = Number(req.params.repetition); await saveStabilityRepetition(req, res, 'A.4.2.3', 'A.4.12.3'); } catch (e) { next(e); } });
-r.patch('/:id/stability-of-equilibrium/tare/repetitions/:repetition', async (req: any, res, next) => { try { req.body.repetition = Number(req.params.repetition); await saveStabilityRepetition(req, res, 'A.4.6.2', 'A.4.12.4'); } catch (e) { next(e); } });
+r.patch('/:id/stability-of-equilibrium/zero-setting/repetitions/:repetition', async (req: any, res, next) => { try { req.body.repetition = Number(req.params.repetition); await saveStabilityRepetition(req, res, 'A.4.12.3'); } catch (e) { next(e); } });
+r.patch('/:id/stability-of-equilibrium/tare/repetitions/:repetition', async (req: any, res, next) => { try { req.body.repetition = Number(req.params.repetition); await saveStabilityRepetition(req, res, 'A.4.12.4'); } catch (e) { next(e); } });
 
 r.patch('/:id/stability-of-equilibrium/continuous-disturbance', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); const applicable = (test.plan?.applicableOperations || []) as StabilityOperation[]; const body = z.object({ continuousDisturbanceConfirmed: z.literal(true), operations: z.array(z.object({ operation: z.enum(['PRINT', 'STORE', 'ZERO', 'TARE']), observed: z.enum(['BLOCKED', 'EXECUTED']) })).min(1) }).parse(req.body); const provided = new Map(body.operations.map(item => [item.operation, item.observed])); if (applicable.some(operation => !provided.has(operation))) return res.status(400).json({ message: 'Record the observed inhibition result for every applicable operation.' }); const evaluated = applicable.every(operation => provided.get(operation) === 'BLOCKED') ? 'PASS' : 'FAIL'; test.continuousDisturbance = { continuousDisturbanceConfirmed: true, operations: body.operations, result: evaluated, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.5'); phase.status = 'COMPLETED'; phase.result = evaluated; phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_CONTINUOUS_DISTURBANCE_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluated } }); test.markModified('continuousDisturbance'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test), result: evaluated }); } catch (e) { next(e); }
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); const locked = stabilityMutable(test); if (locked) return res.status(409).json(locked); const applicable = (test.plan?.applicableOperations || []) as StabilityOperation[]; const body = z.object({ continuousDisturbanceConfirmed: z.literal(true), operations: z.array(z.object({ operation: z.enum(['PRINT', 'STORE', 'ZERO', 'TARE']), observed: z.enum(['BLOCKED', 'EXECUTED']) })).min(1) }).parse(req.body); const operations = body.operations.filter(item => applicable.includes(item.operation)); const evaluated = evaluateContinuousDisturbance(applicable, operations); if (evaluated === 'INCOMPLETE') return res.status(400).json({ message: 'Record the observed inhibition result for every applicable operation.' }); test.continuousDisturbance = { continuousDisturbanceConfirmed: true, operations, result: evaluated, recordedAt: new Date(), testerId: req.user._id, testerNameSnapshot: userName(req.user) }; const phase: any = test.phases.find((item: any) => item.code === 'A.4.12.5'); phase.status = 'COMPLETED'; phase.result = evaluated; phase.completedAt = new Date(); activateNextStabilityPhase(test); test.events.push({ action: 'STABILITY_CONTINUOUS_DISTURBANCE_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result: evaluated } }); test.markModified('continuousDisturbance'); test.markModified('phases'); await test.save(); res.json({ test: publicStability(test), result: evaluated }); } catch (e) { next(e); }
 });
 
 r.patch('/:id/stability-of-equilibrium/complete', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); if (test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'Revalidation is required before completing A.4.12.', code: 'REVALIDATION_REQUIRED' }); const required = test.phases.filter((phase: any) => phase.applicability === 'APPLICABLE'); if (required.some((phase: any) => phase.status !== 'COMPLETED')) return res.status(409).json({ message: 'Complete every applicable A.4.12 branch before completing the test.', code: 'INCOMPLETE' }); const result = required.some((phase: any) => phase.result === 'FAIL') ? 'FAIL' : 'PASS'; test.result = result; test.status = 'COMPLETED'; test.completedAt = new Date(); test.events.push({ action: 'STABILITY_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicStability(test) }); } catch (e) { next(e); }
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await StabilityOfEquilibriumTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Stability of equilibrium first.' }); if (test.status === 'COMPLETED') return res.status(409).json({ message: 'A.4.12 is already completed and read-only.', code: 'COMPLETED_LOCKED' }); if (test.status === 'REVALIDATION_REQUIRED') return res.status(409).json({ message: 'Revalidation is required before completing A.4.12.', code: 'REVALIDATION_REQUIRED' }); const required = test.phases.filter((phase: any) => phase.applicability === 'APPLICABLE'); if (!required.length || required.some((phase: any) => phase.status !== 'COMPLETED' || !['PASS', 'FAIL'].includes(String(phase.result)))) return res.status(409).json({ message: 'Complete every applicable A.4.12 branch with a valid result before completing the test.', code: 'INCOMPLETE' }); const result = required.some((phase: any) => phase.result === 'FAIL') ? 'FAIL' : 'PASS'; test.result = result; test.status = 'COMPLETED'; test.completedAt = new Date(); test.events.push({ action: 'STABILITY_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicStability(test) }); } catch (e) { next(e); }
 });
 
 const publicInfluenceFactors = (test: any) => {
@@ -1772,7 +1832,7 @@ r.patch('/:id/influence-factors/voltage', async (req: any, res, next) => {
 });
 
 r.patch('/:id/influence-factors/complete', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Influence Factors first.' }); const required = test.phases.filter((phase: any) => phase.applicability === 'APPLICABLE'); if (required.some((phase: any) => phase.status !== 'COMPLETED')) return res.status(409).json({ message: 'Complete every applicable A.5 branch before continuing to A.6.', code: 'INCOMPLETE' }); const result = required.some((phase: any) => phase.result === 'FAIL') ? 'FAIL' : required.every((phase: any) => phase.result === 'PASS') ? 'PASS' : 'INCOMPLETE'; if (result === 'INCOMPLETE') return res.status(409).json({ message: 'A.5 has incomplete derived results and cannot be finalized.', code: 'INCOMPLETE' }); test.result = result; test.status = 'COMPLETED'; test.completedAt = new Date(); test.events.push({ action: 'INFLUENCE_FACTORS_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicInfluenceFactors(test) }); } catch (e) { next(e); }
+  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id }); if (!test) return res.status(409).json({ message: 'Start Influence Factors first.' }); const required = test.phases.filter((phase: any) => phase.applicability === 'APPLICABLE'); const incomplete = required.filter((phase: any) => phase.status !== 'COMPLETED'); if (incomplete.length) { const names = incomplete.map((phase: any) => `${phase.code} ${phase.name}`).join(', '); return res.status(409).json({ message: `Influence Factors cannot be completed yet. Complete ${names} first.`, code: 'INCOMPLETE', missingBranches: incomplete.map((phase: any) => ({ code: phase.code, name: phase.name, status: phase.status, result: phase.result })) }); } const result = required.some((phase: any) => phase.result === 'FAIL') ? 'FAIL' : required.every((phase: any) => phase.result === 'PASS') ? 'PASS' : 'INCOMPLETE'; if (result === 'INCOMPLETE') return res.status(409).json({ message: 'A.5 has incomplete derived results and cannot be finalized.', code: 'INCOMPLETE' }); test.result = result; test.status = 'COMPLETED'; test.completedAt = new Date(); test.events.push({ action: 'INFLUENCE_FACTORS_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); await test.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicInfluenceFactors(test) }); } catch (e) { next(e); }
 });
 
 r.patch('/:id/laboratory', async (req: any, res, next) => {
@@ -1916,6 +1976,8 @@ const getOwnedReport = (req: any) => {
   return TestReport.findOne({ ...lookup, ...testerReportAccessFilter(req.user._id) }).then((report: any) => report && hasTesterReportAccess(report, req.user._id) ? report : null);
 };
 const userName = (user: any) => `${user.firstName} ${user.lastName}`.trim();
+const publicReport = (report: any) => { const value: any = report.toObject ? report.toObject() : { ...report }; delete value._id; delete value.submittedBy; delete value.__v; return value; };
+const auditReport = (report: any, action: string, user: any, metadata: any = {}) => { report.auditHistory = [...(report.auditHistory || []), { action, actorId: user._id, actorNameSnapshot: userName(user), actorRole: user.role, timestamp: new Date(), metadata }]; };
 const statusFor = (section: string) => section === 'A.2' ? ['NOT_CHECKED', 'MATCHES_DOCUMENTATION', 'DISCREPANCY_FOUND', 'NOT_APPLICABLE'] : ['NOT_CHECKED', 'SATISFACTORY', 'ISSUE_FOUND', 'NOT_APPLICABLE'];
 
 async function appendEvent(session: any, action: string, user: any, checklistItemId?: string, metadata?: any) {
@@ -2270,26 +2332,35 @@ r.post('/:id/endurance/cycles/resume', async (req: any, res, next) => {
 r.post('/:id/endurance/cycles/record', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
-    const body = z.object({ count: z.number().int().positive().max(ENDURANCE_TARGET_CYCLES), eventId: z.string().trim().min(1) }).parse(req.body);
+    const body = z.object({ count: z.number().int().positive(), eventId: z.string().trim().min(1), mode: z.enum(['REAL', 'SYNTHETIC']).default('REAL') }).parse(req.body);
+    if (body.mode === 'REAL' && body.count !== 1) return res.status(400).json({ code: 'REAL_APPLICATION_INCREMENT', message: 'A real endurance application must be recorded one application at a time.' });
+    if (body.mode === 'SYNTHETIC' && !isSyntheticBatchSize(body.count)) return res.status(400).json({ code: 'INVALID_SYNTHETIC_BATCH', message: 'Use an approved synthetic batch size: 1, 10, 100, 1,000, or 10,000.' });
     const current: any = await EnduranceTest.findOne({ reportId: report._id });
     if (!current || current.cycleState !== 'RUNNING') return res.status(409).json({ message: 'Start or resume the endurance cycle session first.' });
-    const upper = ENDURANCE_TARGET_CYCLES - body.count;
+    const target = Number(current.targetCycles || ENDURANCE_TARGET_CYCLES);
+    try { nextCycleCount(Number(current.completedCycles || 0), body.count, target); } catch { return res.status(409).json({ code: 'CYCLE_CONFLICT', message: `This increment would exceed the required ${target.toLocaleString('en-IN')} applications.` }); }
+    const upper = target - body.count;
+    const increment: Record<string, number> = { completedCycles: body.count };
+    if (body.mode === 'SYNTHETIC') increment.syntheticCycles = body.count;
     const updated: any = await EnduranceTest.findOneAndUpdate(
       { _id: current._id, cycleState: 'RUNNING', completedCycles: { $lte: upper }, lastCycleEventId: { $ne: body.eventId } },
-      { $inc: { completedCycles: body.count }, $set: { lastCycleEventId: body.eventId } },
+      { $inc: increment, $set: { lastCycleEventId: body.eventId } },
       { new: true },
     );
     if (!updated) return res.status(409).json({ code: 'CYCLE_CONFLICT', message: 'Cycle event was already recorded or would exceed the required 100,000 applications.' });
     const crossed = ENDURANCE_CHECKPOINTS.filter(checkpoint => checkpoint > current.completedCycles && checkpoint <= updated.completedCycles);
     const now = new Date();
-    const push: any = { events: { action: 'ENDURANCE_CYCLES_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { count: body.count, cycleNumber: updated.completedCycles, eventId: body.eventId } } };
+    const push: any = { events: { action: body.mode === 'SYNTHETIC' ? 'ENDURANCE_SYNTHETIC_BATCH_RECORDED' : 'ENDURANCE_CYCLES_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { count: body.count, cycleNumber: updated.completedCycles, eventId: body.eventId, mode: body.mode, synthetic: body.mode === 'SYNTHETIC' } } };
     if (crossed.length) push.checkpoints = { $each: crossed.map(cycleNumber => ({ cycleNumber, timestamp: now, operator: userName(req.user), actualLoad: updated.actualLoad || null, notes: 'Software recovery checkpoint; not an additional OIML interval.' })) };
     const audited: any = await EnduranceTest.findOneAndUpdate({ _id: updated._id }, { $push: push }, { new: true });
-    if (audited?.completedCycles === ENDURANCE_TARGET_CYCLES) {
-      const completed: any = await EnduranceTest.findOneAndUpdate({ _id: audited._id, completedCycles: ENDURANCE_TARGET_CYCLES }, { $set: { cycleState: 'COMPLETED', 'phases.1.status': 'COMPLETED', 'phases.1.result': 'INCOMPLETE', 'phases.1.completedAt': now, 'phases.2.status': 'AVAILABLE' } }, { new: true });
-      return res.json({ test: publicEndurance(completed || audited) });
+    if (audited?.completedCycles === target) {
+      const synthetic = Number(audited.syntheticCycles || 0) > 0;
+      const completed: any = await EnduranceTest.findOneAndUpdate({ _id: audited._id, completedCycles: target }, { $set: { cycleState: 'COMPLETED', 'phases.1.status': 'COMPLETED', 'phases.1.result': 'INCOMPLETE', 'phases.1.completedAt': now, 'phases.2.status': synthetic ? 'LOCKED' : 'AVAILABLE' } }, { new: true });
+      const message = synthetic ? 'Synthetic prototype count reached 100,000. This does not represent completed laboratory endurance evidence; post-endurance weighing remains locked.' : 'Exactly 100,000 endurance applications recorded.';
+      return res.json({ message, test: publicEndurance(completed || audited) });
     }
-    res.json({ test: publicEndurance(audited || updated) });
+    const message = body.mode === 'SYNTHETIC' ? `Synthetic prototype batch recorded: ${body.count.toLocaleString('en-IN')} applications. This count is not laboratory evidence.` : 'One endurance application recorded.';
+    res.json({ message, test: publicEndurance(audited || updated) });
   } catch (e) { next(e); }
 });
 
@@ -2297,11 +2368,63 @@ r.post('/:id/endurance/abnormal-event', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance) return res.status(409).json({ message: 'Start Endurance first.' });
-    const body = z.object({ eventType: z.enum(['TEST_EQUIPMENT_INTERRUPTION', 'POWER_INTERRUPTION', 'MECHANICAL_ISSUE', 'LOAD_HANDLING_INTERRUPTION', 'INSTRUMENT_FAULT', 'ENVIRONMENTAL_ISSUE', 'OTHER']), description: z.string().trim().min(1), actionTaken: z.string().trim().min(1), continued: z.boolean(), evidence: z.string().optional().default('') }).parse(req.body);
-    const event = { cycleNumber: endurance.completedCycles, timestamp: new Date(), ...body, testerId: req.user._id, testerNameSnapshot: userName(req.user) };
-    const updated: any = await EnduranceTest.findOneAndUpdate({ _id: endurance._id }, { $push: { abnormalEvents: event, events: { action: 'ENDURANCE_ABNORMAL_EVENT_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: event.timestamp, metadata: event } } }, { new: true });
-    res.json({ test: publicEndurance(updated) });
+    const body = z.object({ eventType: z.enum(['TEST_EQUIPMENT_INTERRUPTION', 'POWER_INTERRUPTION', 'MECHANICAL_ISSUE', 'LOAD_HANDLING_INTERRUPTION', 'INSTRUMENT_FAULT', 'ENVIRONMENTAL_ISSUE', 'OTHER']), description: z.string().trim().min(1), actionTaken: z.string().trim().min(1), continued: z.boolean(), evidence: z.string().optional().default(''), applicationCompleted: z.enum(['NONE', 'ONE']).default('NONE'), eventId: z.string().trim().min(1).optional() }).parse(req.body);
+    const eventId = body.eventId || crypto.randomUUID();
+    const now = new Date();
+    const target = Number(endurance.targetCycles || ENDURANCE_TARGET_CYCLES);
+    if (body.applicationCompleted === 'ONE') {
+      if (endurance.cycleState !== 'RUNNING') return res.status(409).json({ code: 'CYCLE_NOT_RUNNING', message: 'Resume the endurance cycle before recording an application completed during an abnormal event.' });
+      try { nextCycleCount(Number(endurance.completedCycles || 0), 1, target); } catch { return res.status(409).json({ code: 'CYCLE_CONFLICT', message: `The required ${target.toLocaleString('en-IN')} applications are already complete.` }); }
+      const cycleNumber = Number(endurance.completedCycles || 0) + 1;
+      const event = { cycleNumber, timestamp: now, ...body, eventId, testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+      const updated: any = await EnduranceTest.findOneAndUpdate({ _id: endurance._id, cycleState: 'RUNNING', completedCycles: { $lt: target }, lastAbnormalEventId: { $ne: eventId } }, { $inc: { completedCycles: 1 }, $set: { lastAbnormalEventId: eventId }, $push: { abnormalEvents: event, events: { action: 'ENDURANCE_ABNORMAL_EVENT_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { ...event, applicationIncrement: 1 } } } }, { new: true });
+      if (!updated) return res.status(409).json({ code: 'ABNORMAL_EVENT_CONFLICT', message: 'This abnormal event was already recorded or the endurance count changed. Reload before trying again.' });
+      if (updated.completedCycles === target) await EnduranceTest.findOneAndUpdate({ _id: updated._id }, { $set: { cycleState: 'COMPLETED', 'phases.1.status': 'COMPLETED', 'phases.1.result': 'INCOMPLETE', 'phases.1.completedAt': now, 'phases.2.status': 'AVAILABLE' } });
+      return res.json({ message: `Abnormal event recorded. 1 application recorded. Count: ${cycleNumber.toLocaleString('en-IN')}.`, test: publicEndurance(updated) });
+    }
+    const event = { cycleNumber: endurance.completedCycles, timestamp: now, ...body, eventId, testerId: req.user._id, testerNameSnapshot: userName(req.user) };
+    const updated: any = await EnduranceTest.findOneAndUpdate({ _id: endurance._id, lastAbnormalEventId: { $ne: eventId } }, { $set: { lastAbnormalEventId: eventId }, $push: { abnormalEvents: event, events: { action: 'ENDURANCE_ABNORMAL_EVENT_RECORDED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: event } } }, { new: true });
+    if (!updated) return res.status(409).json({ code: 'ABNORMAL_EVENT_DUPLICATE', message: 'This abnormal event was already recorded.' });
+    res.json({ message: `Abnormal event recorded. Application count unchanged at ${Number(updated.completedCycles || 0).toLocaleString('en-IN')}.`, test: publicEndurance(updated) });
   } catch (e) { next(e); }
+});
+
+r.patch('/:id/endurance/phase-02/skip-prototype', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const endurance: any = await EnduranceTest.findOne({ reportId: report._id });
+    if (!endurance) return res.status(409).json({ code: 'ENDURANCE_REQUIRED', message: 'Start Endurance before skipping Phase 02.' });
+    if (!canSkipPhaseTwoForPrototype(endurance)) return res.status(409).json({ code: 'PROTOTYPE_SKIP_REQUIRED', message: 'Complete the synthetic prototype count before using the prototype Phase 02 shortcut.' });
+    if (isPrototypeWorkflow(endurance)) return res.json({ message: 'Phase 02 is already skipped in prototype mode.', test: publicEndurance(endurance) });
+    const now = new Date();
+    const phase2: any = endurance.phases.find((item: any) => item.code === 'A.6.2');
+    const phase3: any = endurance.phases.find((item: any) => item.code === 'A.6.3');
+    if (!phase2 || !phase3) return res.status(409).json({ code: 'PHASE_CONFIGURATION_REQUIRED', message: 'The endurance phase configuration is incomplete.' });
+    endurance.phase2SkipMode = 'PROTOTYPE';
+    endurance.phase2SkippedAt = now;
+    endurance.phase2SkippedBy = req.user._id;
+    endurance.phase2SkippedByName = userName(req.user);
+    phase2.status = 'SKIPPED';
+    phase2.result = 'INCOMPLETE';
+    phase2.skipMode = 'PROTOTYPE';
+    phase2.skippedAt = now;
+    phase2.skippedByName = userName(req.user);
+    phase3.status = 'AVAILABLE';
+    phase3.result = 'INCOMPLETE';
+    phase3.workflowMode = 'PROTOTYPE';
+    endurance.events.push({ action: 'ENDURANCE_PHASE_02_SKIPPED_PROTOTYPE', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: now, metadata: { mode: 'PROTOTYPE', syntheticCycles: endurance.syntheticCycles, completedCycles: endurance.completedCycles, targetCycles: endurance.targetCycles, reason: 'Software workflow demonstration; not legal-metrology evidence.' } });
+    endurance.markModified('phases');
+    await endurance.save();
+    res.json({ message: 'Phase 02 skipped for prototype workflow testing. Synthetic endurance data remains non-legal evidence.', test: publicEndurance(endurance) });
+  } catch (e) { next(e); }
+});
+
+// Synthetic prototype batches are deliberately barred from the legal post-endurance workflow.
+r.patch('/:id/endurance/post-weighing', async (req: any, res, next) => {
+  const report = await getOwnedReport(req); if (!report) return next();
+  const endurance: any = await EnduranceTest.findOne({ reportId: report._id });
+  if (Number(endurance?.syntheticCycles || 0) > 0 && !isPrototypeWorkflow(endurance)) return res.status(409).json({ code: 'SYNTHETIC_EVIDENCE', message: 'Synthetic prototype batches cannot be used as legal endurance evidence. Record the actual 100,000 laboratory applications before post-endurance weighing.' });
+  next();
 });
 
 r.patch('/:id/endurance/post-weighing', async (req: any, res, next) => {
@@ -2311,7 +2434,21 @@ r.patch('/:id/endurance/post-weighing', async (req: any, res, next) => {
 });
 
 r.patch('/:id/endurance/complete', async (req: any, res, next) => {
-  try { const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const endurance: any = await EnduranceTest.findOne({ reportId: report._id }); if (!endurance || endurance.completedCycles !== ENDURANCE_TARGET_CYCLES || !endurance.preWeighing || !endurance.postWeighing || !endurance.durabilityAssessment?.supported) return res.status(409).json({ code: 'INCOMPLETE', message: 'Complete the pre-endurance weighing, all 100,000 applications, post-endurance weighing, and durability assessment before completing A.6.' }); const result = endurance.durabilityAssessment.result; endurance.result = result; endurance.status = 'COMPLETED'; endurance.completedAt = new Date(); const phase: any = endurance.phases.find((item: any) => item.code === 'A.6.4'); if (phase) { phase.status = 'COMPLETED'; phase.result = result; phase.completedAt = new Date(); } endurance.events.push({ action: 'ENDURANCE_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result } }); endurance.markModified('phases'); await endurance.save(); report.stage = 'TESTING'; report.status = 'TESTING'; await report.save(); res.json({ report, test: publicEndurance(endurance) }); } catch (e) { next(e); }
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const endurance: any = await EnduranceTest.findOne({ reportId: report._id });
+    if (!endurance || endurance.completedCycles !== ENDURANCE_TARGET_CYCLES || !endurance.preWeighing || !endurance.postWeighing || !endurance.durabilityAssessment?.supported) return res.status(409).json({ code: 'INCOMPLETE', message: 'Complete the pre-endurance weighing, all 100,000 applications, post-endurance weighing, and durability assessment before opening the final testing handoff.' });
+    const prototype = Number(endurance.syntheticCycles || 0) > 0;
+    if (prototype && !isPrototypeWorkflow(endurance)) return res.status(409).json({ code: 'SYNTHETIC_EVIDENCE', message: 'Synthetic prototype batches cannot be finalized until the tester explicitly selects the prototype handoff path.' });
+    const result = endurance.durabilityAssessment.result;
+    if (!prototype) {
+      endurance.result = result; endurance.status = 'COMPLETED'; endurance.completedAt = new Date();
+      const phase: any = endurance.phases.find((item: any) => item.code === 'A.6.4'); if (phase) { phase.status = 'COMPLETED'; phase.result = result; phase.completedAt = new Date(); }
+      endurance.events.push({ action: 'ENDURANCE_TEST_COMPLETED', testerId: req.user._id, testerNameSnapshot: userName(req.user), timestamp: new Date(), metadata: { result, evidenceMode: 'REAL' } }); endurance.markModified('phases'); await endurance.save();
+    }
+    report.stage = 'REVIEW'; report.status = ['AWAITING_REVIEW', 'UNDER_REVIEW'].includes(String(report.status)) ? report.status : 'TESTING'; report.reviewDraftAt = report.reviewDraftAt || new Date(); report.reviewDraftBy = req.user._id; report.reviewDraftByName = userName(req.user); auditReport(report, 'TESTING_HANDOFF_OPENED', req.user, { prototype, enduranceResult: result, syntheticCycles: endurance.syntheticCycles || 0 }); await report.save();
+    res.json({ report: publicReport(report), test: publicEndurance(endurance), handoff: true, prototype, message: prototype ? 'Prototype testing handoff opened. Synthetic endurance data remains non-legal evidence.' : 'Testing handoff opened.' });
+  } catch (e) { next(e); }
 });
 
 const applicableTestCompletion = async (report: any) => {
@@ -2395,9 +2532,29 @@ r.get('/:id/review', async (req: any, res, next) => {
     const derivedMultipleIndicating = await multipleIndicatingState(report, req.user);
     if (derivedMultipleIndicating.test) state.multipleIndicating = derivedMultipleIndicating.test;
     if (state.multipleIndicating && ['PASS', 'FAIL'].includes(state.multipleIndicating.status)) state.pendingTests = state.pendingTests.filter((test: any) => test.code !== 'A.4.5');
+    const prototype = Number(endurance?.syntheticCycles || 0) > 0 || isPrototypeWorkflow(endurance);
+    if (prototype) state.pendingTests = state.pendingTests.filter((test: any) => test.code !== 'A.6');
     const attentionTests = state.attentionTests;
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;
-  res.json({ report: value, verification, zeroChecking: zeroChecking ? publicZeroChecking(zeroChecking) : null, zeroSettingBeforeLoading: zeroSettingBeforeLoading ? publicZeroSetting(zeroSettingBeforeLoading) : null, tare: tare ? publicTare(tare, report.instrument) : null, eccentricity: state.eccentricity ? publicEccentricity(state.eccentricity) : null, multipleIndicating: state.multipleIndicating ? publicMultipleIndicating(state.multipleIndicating) : null, discrimination: discrimination ? publicDiscrimination(discrimination) : null, sensitivity: sensitivity ? publicSensitivity(sensitivity) : null, repeatability: repeatability ? publicRepeatability(repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null, endurance: endurance ? publicEndurance(endurance) : null, performance: performance ? publicPerformance(performance) : null, applicability: state.route, pendingTests: state.pendingTests, attentionTests, readinessError: reviewReadiness(report, performance, state.pendingTests, attentionTests) });
+    const evidence = await Evidence.find({ reportId: report._id, status: 'ACTIVE' }).select('-data').sort({ createdAt: 1 });
+    const messages = await ReportMessage.find({ reportId: report._id }).sort({ createdAt: 1 }).lean();
+    const readinessError = reviewReadiness(report, performance, state.pendingTests, attentionTests);
+    const overallResult = deriveOverallResult(state.route, {
+      'A.4.2': state.zeroChecking,
+      'A.4.3': state.zeroSettingBeforeLoading,
+      'A.4.4': performance,
+      'A.4.5': state.multipleIndicating,
+      'A.4.6': state.tare,
+      'A.4.7': state.eccentricity,
+      'A.4.8': state.discrimination,
+      'A.4.9': state.sensitivity,
+      'A.4.10': state.repeatability,
+      'A.4.11': state.variationWithTime,
+      'A.4.12': state.stabilityOfEquilibrium,
+      'A.5': state.influenceFactors,
+      'A.6': endurance,
+    }, prototype);
+    res.json({ report: value, verification, zeroChecking: zeroChecking ? publicZeroChecking(zeroChecking) : null, zeroSettingBeforeLoading: zeroSettingBeforeLoading ? publicZeroSetting(zeroSettingBeforeLoading) : null, tare: tare ? publicTare(tare, report.instrument) : null, eccentricity: state.eccentricity ? publicEccentricity(state.eccentricity) : null, multipleIndicating: state.multipleIndicating ? publicMultipleIndicating(state.multipleIndicating) : null, discrimination: discrimination ? publicDiscrimination(discrimination) : null, sensitivity: sensitivity ? publicSensitivity(sensitivity) : null, repeatability: repeatability ? publicRepeatability(repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null, endurance: endurance ? publicEndurance(endurance) : null, performance: performance ? publicPerformance(performance) : null, applicability: state.route, pendingTests: state.pendingTests, attentionTests, readinessError, overallResult, prototype, evidence: evidence.map((item: any) => ({ ...item.toObject(), id: String(item._id), fileUrl: `/evidence/${item._id}/file` })), messages, auditHistory: value.auditHistory || [] });
   } catch (e) { next(e); }
 });
 
@@ -2405,7 +2562,10 @@ r.post('/:id/review/submit', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const performance = await WeighingPerformanceTest.findOne({ reportId: report._id });
+    const endurance: any = await EnduranceTest.findOne({ reportId: report._id });
     const state = await applicableTestCompletion(report);
+    const prototype = Number(endurance?.syntheticCycles || 0) > 0 || isPrototypeWorkflow(endurance);
+    if (prototype) state.pendingTests = state.pendingTests.filter((test: any) => test.code !== 'A.6');
     const attentionTests = state.attentionTests;
     const readinessError = reviewReadiness(report, performance, state.pendingTests, attentionTests); if (readinessError) return res.status(409).json({ message: readinessError });
     const requiredTests = requiredEvidenceTestIds();
@@ -2414,11 +2574,61 @@ r.post('/:id/review/submit', async (req: any, res, next) => {
       const missing = requiredTests.filter(testId => !evidence.some(item => item.testId === testId));
       if (missing.length) return res.status(409).json({ message: `Verification evidence is required for ${missing.join(', ')} before this report can be submitted.`, code: 'EVIDENCE_REQUIRED', missingTests: missing });
     }
-    if (report.status === 'UNDER_REVIEW') return res.json({ report });
+    if (report.status === 'AWAITING_REVIEW' || report.status === 'UNDER_REVIEW') return res.status(409).json({ message: 'This report has already been submitted for review.', code: 'ALREADY_SUBMITTED' });
     const resubmission = report.status === 'CHANGES_REQUESTED';
-    report.stage = 'REVIEW'; report.status = 'UNDER_REVIEW'; report.submittedForReviewAt = new Date(); if (resubmission) report.resubmittedAt = new Date(); await report.save();
-    const value: any = report.toObject(); delete value._id; delete value.submittedBy;
-    res.json({ report: value });
+    report.stage = 'REVIEW'; report.status = 'AWAITING_REVIEW'; report.submittedForReviewAt = new Date(); report.submittedBy = req.user._id; if (resubmission) report.resubmittedAt = new Date(); auditReport(report, 'REPORT_SUBMITTED_FOR_REVIEW', req.user, { prototype }); await report.save();
+    res.json({ report: publicReport(report), prototype, workflowStatus: report.status, message: prototype ? 'Prototype report submitted for review. It remains clearly marked as non-legal evidence.' : 'Report submitted for review.' });
+  } catch (e) { next(e); }
+});
+
+r.get('/:id/review/messages', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const messages = await ReportMessage.find({ reportId: report._id }).sort({ createdAt: 1 }).lean();
+    res.json({ messages });
+  } catch (e) { next(e); }
+});
+
+r.post('/:id/review/messages', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    if (['COMPLETED', 'CANCELLED', 'REJECTED'].includes(String(report.status))) return res.status(409).json({ message: 'Communication is read-only after the report is closed.' });
+    const body = z.object({ subject: z.string().trim().min(1, 'Subject is required.').max(200), message: z.string().trim().min(1, 'Message is required.').max(10000) }).parse(req.body);
+    const created = await ReportMessage.create({ reportId: report._id, senderId: req.user._id, senderNameSnapshot: userName(req.user), senderRole: req.user.role, recipientRole: 'REVIEWER', subject: body.subject, message: body.message });
+    auditReport(report, 'AUTHORITY_MESSAGE_SENT', req.user, { messageId: String(created._id), subject: body.subject }); await report.save();
+    res.status(201).json({ message: created.toObject() });
+  } catch (e) { next(e); }
+});
+
+r.get('/:id/review/pdf', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const performance = await WeighingPerformanceTest.findOne({ reportId: report._id });
+    const influenceFactors = await InfluenceFactorsTest.findOne({ reportId: report._id });
+    const endurance = await EnduranceTest.findOne({ reportId: report._id });
+    const state = await applicableTestCompletion(report);
+    const prototype = Number(endurance?.syntheticCycles || 0) > 0 || isPrototypeWorkflow(endurance);
+    const evidence = await Evidence.find({ reportId: report._id, status: 'ACTIVE' }).select('-data').sort({ createdAt: 1 });
+    const messages = await ReportMessage.find({ reportId: report._id }).sort({ createdAt: 1 }).lean();
+    const generatedAt = new Date();
+    const overallResult = deriveOverallResult(state.route, {
+      'A.4.2': state.zeroChecking,
+      'A.4.3': state.zeroSettingBeforeLoading,
+      'A.4.4': performance,
+      'A.4.5': state.multipleIndicating,
+      'A.4.6': state.tare,
+      'A.4.7': state.eccentricity,
+      'A.4.8': state.discrimination,
+      'A.4.9': state.sensitivity,
+      'A.4.10': state.repeatability,
+      'A.4.11': state.variationWithTime,
+      'A.4.12': state.stabilityOfEquilibrium,
+      'A.5': state.influenceFactors,
+      'A.6': endurance,
+    }, prototype);
+    const pdf = buildDraftReportPdf({ report: publicReport(report), applicability: state.route, performance: performance ? publicPerformance(performance) : null, influenceFactors: influenceFactors ? publicInfluenceFactors(influenceFactors) : null, endurance: endurance ? publicEndurance(endurance) : null, verification: null, prototype, overallResult, records: { 'A.4.2': state.zeroChecking, 'A.4.3': state.zeroSettingBeforeLoading, 'A.4.4': performance, 'A.4.5': state.multipleIndicating, 'A.4.6': state.tare, 'A.4.7': state.eccentricity, 'A.4.8': state.discrimination, 'A.4.9': state.sensitivity, 'A.4.10': state.repeatability, 'A.4.11': state.variationWithTime, 'A.4.12': state.stabilityOfEquilibrium, 'A.5': state.influenceFactors, 'A.6': endurance }, evidence: evidence.map((item: any) => ({ ...item.toObject() })), messages, generatedAt });
+    report.draftPdfGeneratedAt = generatedAt; report.draftPdfGeneratedBy = req.user._id; report.draftPdfPrototype = prototype; auditReport(report, 'DRAFT_PDF_GENERATED', req.user, { prototype }); await report.save();
+    res.status(200).set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${report.testReportId}-draft-report.pdf"`, 'Content-Length': String(pdf.length), 'Cache-Control': 'no-store' }).send(pdf);
   } catch (e) { next(e); }
 });
 

@@ -62,15 +62,21 @@ const precision = (value: number) => Number(value.toFixed(12));
 const source = (code: string) => `${INFLUENCE_FACTORS_SOURCE} ${code}`;
 
 export function voltageLimits(snapshot: InfluenceFactorSnapshot) {
-  const sourceMin = snapshot.specifiedVoltageRange?.min ?? snapshot.nominalVoltage;
-  const sourceMax = snapshot.specifiedVoltageRange?.max ?? snapshot.maximumVoltage ?? snapshot.nominalVoltage;
+  const specifiedMin = snapshot.specifiedVoltageRange?.min;
+  const specifiedMax = snapshot.specifiedVoltageRange?.max;
+  const hasMarkedRange = specifiedMin !== undefined || specifiedMax !== undefined;
+  const sourceMin = specifiedMin ?? snapshot.nominalVoltage;
+  const sourceMax = specifiedMax ?? snapshot.maximumVoltage ?? snapshot.nominalVoltage;
   const nominal = snapshot.nominalVoltage;
   const minimum = snapshot.minimumOperatingVoltage;
   const type = snapshot.powerSourceType;
   if (!type) return { supported: false as const, reason: 'Power-source type is required to select the A.5.4 branch.' };
   if (type === 'AC_MAINS') {
-    if (!finite(sourceMin) || !finite(sourceMax)) return { supported: false as const, reason: 'Nominal or specified AC voltage range is required for A.5.4.1.' };
-    return { supported: true as const, branch: 'A.5.4.1', lower: precision(sourceMin * 0.85), upper: precision(sourceMax * 1.10), formula: '0.85 Umin/Unom to 1.10 Umax/Unom', threePhase: snapshot.threePhaseSupply === true };
+    if (!finite(nominal) || nominal <= 0) return { supported: false as const, reason: 'A positive nominal AC voltage is required for A.5.4.1.' };
+    if (hasMarkedRange && (!finite(specifiedMin) || specifiedMin <= 0 || !finite(specifiedMax) || specifiedMax <= 0 || specifiedMin > specifiedMax)) return { supported: false as const, reason: 'A complete positive marked AC voltage range is required when one is configured.' };
+    const lowerBase = hasMarkedRange ? specifiedMin as number : nominal;
+    const upperBase = hasMarkedRange ? specifiedMax as number : nominal;
+    return { supported: true as const, branch: 'A.5.4.1', reference: precision(hasMarkedRange ? (lowerBase + upperBase) / 2 : nominal), lower: precision(lowerBase * 0.85), upper: precision(upperBase * 1.10), formula: hasMarkedRange ? '0.85 Umin to 1.10 Umax' : '0.85 Unom to 1.10 Unom', threePhase: snapshot.threePhaseSupply === true };
   }
   if (!finite(minimum) || !finite(nominal ?? sourceMax)) return { supported: false as const, reason: 'Minimum operating voltage and nominal/specified upper voltage are required for A.5.4.' };
   const upperBase = finite(sourceMax) ? sourceMax : nominal as number;
@@ -170,5 +176,8 @@ export function evaluateInfluenceFactorsCompliance(snapshot: InfluenceFactorSnap
 }
 
 export function influenceFactorsFingerprint(snapshot: InfluenceFactorSnapshot) {
-  return JSON.stringify({ ...snapshot });
+  const normalized = { ...snapshot } as Record<string, unknown>;
+  const range = normalized.specifiedVoltageRange as { min?: unknown; max?: unknown } | undefined;
+  if (!range || (range.min === undefined && range.max === undefined)) delete normalized.specifiedVoltageRange;
+  return JSON.stringify(normalized);
 }
