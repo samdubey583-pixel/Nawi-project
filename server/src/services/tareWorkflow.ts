@@ -81,8 +81,11 @@ export function deriveTareReadiness(routeTests: TareRouteTest[], states: Record<
   const target = routeTests.find(test => test.code === 'A.4.6');
   if (!target) return { complete: false, missing: [{ code: 'A.4.6', name: 'Tare' }] };
 
+  // These are the actual source checks already used by the tare procedure;
+  // route position is not itself a dependency. Keep the applicability filter
+  // so a genuinely inapplicable source clause does not block tare.
   const required = routeTests
-    .filter(test => test.status === 'APPLICABLE' && test.order < target.order)
+    .filter(test => test.status === 'APPLICABLE')
     .filter(test => ['A.4.2', 'A.4.3', 'A.4.4', 'A.4.5'].includes(test.code));
   const missing = required.filter(test => !isComplete(test.code, states[test.code])).map(test => ({ code: test.code, name: test.name }));
   return { complete: missing.length === 0, missing };

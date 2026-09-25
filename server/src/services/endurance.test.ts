@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessDurability, calculateEnduranceWeighing, canSkipPhaseTwoForPrototype, enduranceApplicability, endurancePlan, isPrototypeWorkflow, isSyntheticBatchSize, nextCycleCount } from './endurance.js';
+import { assessDurability, calculateEnduranceWeighing, canSkipPhaseTwoForPrototype, enduranceApplicability, endurancePlan, isPrototypeWorkflow, isSyntheticBatchSize, nextCycleCount, phaseTwoCompletionState } from './endurance.js';
 
 const snapshot = (overrides: any = {}) => ({ accuracyClass: 'Class III', min: 200, max: 30000, e: 10, d: 1, unit: 'g' as const, rangeType: 'single-range', ...overrides });
 
@@ -55,4 +55,14 @@ test('prototype phase skip requires a complete synthetic target and remains dist
   assert.equal(isPrototypeWorkflow({ phase2SkipMode: 'PROTOTYPE' }), true);
   assert.equal(isPrototypeWorkflow({ phases: [{ code: 'A.6.2', skipMode: 'PROTOTYPE' }] }), true);
   assert.equal(isPrototypeWorkflow({ phase2SkipMode: undefined }), false);
+});
+
+test('synthetic batch completion opens post-endurance without changing its classification', () => {
+  const state = phaseTwoCompletionState(true);
+  assert.equal(state.cycleState, 'COMPLETED');
+  assert.equal(state.phase2Status, 'COMPLETED');
+  assert.equal(state.phase2Result, 'PASS');
+  assert.equal(state.phase3Status, 'AVAILABLE');
+  assert.match(state.message, /prototype/i);
+  assert.doesNotMatch(state.message, /locked/i);
 });

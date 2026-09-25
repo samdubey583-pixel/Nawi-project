@@ -1,4 +1,5 @@
 import { getMpe } from './mpeRules.js';
+import { convertMass, isMassUnit, type MassUnit } from './mass.js';
 
 export const MULTIPLE_INDICATING_TEST_VERSION = 'R76-A4.5-1.0';
 export const MULTIPLE_INDICATING_SOURCE = 'OIML R 76-1:2006 §3.6.3; comparison during Annex A A.4.4';
@@ -26,6 +27,26 @@ export type IndicationComparison = {
   ruleVersion: string;
   result: 'PASS' | 'FAIL' | 'INCOMPLETE';
 };
+
+export function recordMissingDeviceIndication(input: {
+  performance: any; sequence: number; indication: number; unit: string; reportStatus: string;
+}) {
+  const test = input.performance;
+  if (input.reportStatus !== 'TESTING' || test?.status !== 'COMPLETED') throw new Error('Only a completed A.4.4 source on an actively testing report can receive a missing Device 2 observation.');
+  if (test.instrumentSnapshot?.multipleIndicatingDevices !== true) throw new Error('The persisted instrument is not configured with multiple indicating devices.');
+  if (!Number.isSafeInteger(input.sequence) || !Number.isFinite(input.indication) || !isMassUnit(input.unit)) throw new Error('Enter a valid sequence, indication, and supported mass unit.');
+  const point = (test.loadPoints || []).find((item: any) => Number(item.sequence) === input.sequence);
+  if (!point) throw new Error('The requested A.4.4 observation does not exist.');
+  const devices = Array.isArray(point.indicatingDevices) ? point.indicatingDevices : [];
+  if (!devices.some((device: any) => device.deviceId === 'DEVICE_1')) throw new Error('The source observation has no recorded Device 1 indication.');
+  if (devices.some((device: any) => device.deviceId === 'DEVICE_2')) throw new Error('Device 2 is already recorded for this observation; existing readings are not overwritten.');
+  const instrumentUnit: MassUnit = isMassUnit(test.instrumentSnapshot?.unit) ? test.instrumentSnapshot.unit : 'g';
+  const indication = convertMass(input.indication, input.unit as MassUnit, instrumentUnit);
+  point.indicatingDevices ||= [];
+  point.indicatingDevices.push({ deviceId: 'DEVICE_2', label: 'Device 2', type: 'DISPLAY', unit: input.unit, inputIndication: input.indication, indication });
+  point.updatedAt = new Date();
+  return point;
+}
 
 export function sourceFingerprint(performance: any) {
   return JSON.stringify({

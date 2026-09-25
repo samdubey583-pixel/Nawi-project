@@ -6,6 +6,7 @@ const reportMessageSchema = new Schema({
   senderNameSnapshot: { type: String, required: true },
   senderRole: { type: String, required: true },
   recipientRole: { type: String, default: 'REVIEWER' },
+  reviewerReadAt: Date,
   subject: { type: String, required: true, trim: true, maxlength: 200 },
   message: { type: String, required: true, trim: true, maxlength: 10000 },
   readAt: Date,

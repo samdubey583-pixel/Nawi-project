@@ -52,6 +52,16 @@ export function recalculateTareSettingPhase(phase: TareSettingPhaseForMutation, 
   return completion;
 }
 
+export function completeTareSettingPhase(phase: TareSettingPhaseForMutation, requiredRepetitions: number, completedAt = new Date()) {
+  const completion = evaluateTareSettingCompletion(phase.observations, requiredRepetitions);
+  if (!completion.complete) return { completed: false, completion };
+  phase.calculations = { ...(phase.calculations || {}), completion, result: completion.result };
+  phase.result = completion.result;
+  phase.status = 'COMPLETED';
+  phase.completedAt = completedAt;
+  return { completed: true, completion };
+}
+
 export function recalculateTareLoadPhase(test: any, phase: any, snapshot: Record<string, any>) {
   const completion = evaluateTareCompletion({
     observations: phase.observations,

@@ -1,9 +1,30 @@
 import type { InstrumentProfile, TestApplicabilityResult } from './testApplicability.js';
 
 export type ZeroSettingBeforeLoadingMethod = 'A.4.3(a)' | 'A.4.3(b)';
+export type ZeroSettingExecutionMode = 'PHYSICAL' | 'SYNTHETIC_SIMULATION';
+
+export type ZeroSettingProcedureObservations = {
+  halfIntervalWeightApplied: boolean;
+  indicationAlternatedAtZero: boolean;
+  halfIntervalWeightRemoved: boolean;
+  centreOfZeroReferenceReached: boolean;
+};
+
+export function validateZeroSettingCompletion(input: { confirmed: boolean; executionMode: ZeroSettingExecutionMode; operatorNotes?: string }): { valid: boolean; message?: string } {
+  if (!input.confirmed) return { valid: false, message: 'Confirm the selected A.4.3 workflow before completing it.' };
+  if (input.executionMode === 'SYNTHETIC_SIMULATION' && !/synthetic|simulation|regression/i.test(input.operatorNotes || '')) {
+    return { valid: false, message: 'Synthetic simulation notes must identify this as synthetic, simulation, or regression data.' };
+  }
+  return { valid: true };
+}
+
+export function evaluateNonAutomaticZeroSettingProcedure(observations: ZeroSettingProcedureObservations) {
+  const required = Object.values(observations);
+  return { complete: required.every(value => typeof value === 'boolean'), result: required.every(Boolean) ? 'PASS' as const : 'FAIL' as const };
+}
 
 export type ZeroSettingBeforeLoadingProcedure = {
-  status: 'APPLICABLE' | 'REQUIRES_CONFIGURATION' | 'UNSUPPORTED';
+  status: 'APPLICABLE' | 'NOT_APPLICABLE' | 'REQUIRES_CONFIGURATION' | 'UNSUPPORTED';
   method?: ZeroSettingBeforeLoadingMethod;
   methodLabel?: string;
   dependency?: { code: 'A.4.2'; phase: 'A.4.2.3' };
@@ -16,7 +37,7 @@ export function determineZeroBeforeLoadingProcedure(profile: InstrumentProfile):
     return { status: 'REQUIRES_CONFIGURATION', executionSupported: false, reason: 'Digital-indication configuration is required to select the A.4.3 procedure.' };
   }
   if (profile.digitalIndication === false) {
-    return { status: 'UNSUPPORTED', executionSupported: false, reason: 'The current A.4.3 execution module supports the digital-indication procedure only.' };
+    return { status: 'NOT_APPLICABLE', executionSupported: false, reason: 'A.4.3 applies to instruments with digital indication; this instrument is configured without digital indication.' };
   }
   if (!profile.zeroSettingMethod) {
     return { status: 'REQUIRES_CONFIGURATION', executionSupported: false, reason: 'Zero-setting method is required to select the A.4.3 procedure.' };
@@ -27,8 +48,8 @@ export function determineZeroBeforeLoadingProcedure(profile: InstrumentProfile):
       status: 'APPLICABLE',
       method: 'A.4.3(a)',
       methodLabel: 'Non-automatic zero-setting',
-      executionSupported: false,
-      reason: 'Use the half-scale-interval zero-setting procedure in OIML R 76-1:2006 Annex A A.4.3(a). The procedural observation module is not part of this implementation yet.',
+      executionSupported: true,
+      reason: 'Record the half-scale-interval placement, alternating zero indication, removal and centre-of-zero reference procedure in OIML R 76-1:2006 Annex A A.4.3(a).',
     };
   }
 

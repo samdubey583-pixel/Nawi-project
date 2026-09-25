@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import './sensitivity.css';
 import TestProcedureInfo from '../guidance/TestProcedureInfo';
+import EvidencePanel from '../evidence/EvidencePanel';
 
 const units = ['mg', 'g', 'kg', 't'];
 const format = (value: unknown, unit?: string) => Number.isFinite(Number(value)) ? `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 9 }).format(Number(value))}${unit ? ` ${unit}` : ''}` : '—';
@@ -25,6 +26,7 @@ export default function SensitivityWorkspace() {
         <section className="sensitivity-progress" aria-label="Sensitivity stages">{stages.map((stage: any, index: number) => <div className={stage.status === 'COMPLETED' ? 'complete' : index === activeIndex ? 'active' : 'locked'} key={stage.stageId}><span>{stage.status === 'COMPLETED' ? <Check size={15} /> : stage.status === 'LOCKED' ? <Lock size={14} /> : index + 1}</span><strong>{stage.label}</strong><small>{format(stage.appliedTestLoad?.value, stage.appliedTestLoad?.unit || unit)}</small></div>)}</section>
         {active ? <SensitivityStageForm key={`${active.stageId}-${active.observation?.recordedAt || 'new'}`} stage={active} unit={unit} procedureConfirmed={test.procedureConfirmation?.normalOscillationConfirmed === true} busy={busy} onSubmit={async values => { setBusy(true); try { const response = await axios.patch(`/test-reports/${reportId}/sensitivity/stages/${active.stageId}`, values); setData((current: any) => ({ ...current, test: response.data.test })); setError(''); } catch (e: any) { setError(e.response?.data?.message || 'Unable to save the sensitivity observation.'); } finally { setBusy(false); } }} /> : <section className="sensitivity-panel sensitivity-complete"><Check size={24} /><h2>A.4.9 Sensitivity completed · {test.result}</h2><p>Both required load stages were evaluated from the saved physical observations.</p><Link className="sensitivity-secondary" to={`/tester/reports/${reportId}/testing`}>Return to Testing</Link></section>}
         <section className="sensitivity-panel"><div className="sensitivity-panel-title"><div><span className="technical-label">TRACEABILITY</span><h2>OIML procedure</h2></div><span>OIML R 76-1:2006 Annex A A.4.9 · §6.1</span></div><p>The MPE determines the required extra load. Acceptance is based separately on the measured permanent linear displacement and the class/capacity requirement.</p></section>
+        <EvidencePanel context={{ reportId, testId: 'A.4.9', instrumentId: data.report?.instrumentId, category: 'TEST_SETUP', evidenceType: 'sensitivity_setup', label: 'A.4.9 · Sensitivity · Test Setup', title: 'A.4.9 · Sensitivity', testName: 'Sensitivity', oimlReference: 'A.4.9', addLabel: 'Add Evidence', desktopLabel: 'Upload from PC', mobileLabel: 'Capture from Phone' }} />
         <TestProcedureInfo testId="A.4.9" configuration={{ ...snapshot, applicabilityStatus: applicability?.status }} />
       </>}
     </section>

@@ -1,6 +1,7 @@
 import { getMpe } from './mpeRules.js';
 import { convertMass, isMassUnit, type MassUnit } from './mass.js';
 import { calculateChangeoverError } from './weighingCalculations.js';
+import { isWithinLimit } from './compliance.js';
 
 export const INFLUENCE_FACTORS_TEST_VERSION = 'R76-A5-1.0';
 export const INFLUENCE_FACTORS_ENGINE_VERSION = INFLUENCE_FACTORS_TEST_VERSION;
@@ -107,10 +108,10 @@ export function temperaturePlan(snapshot: InfluenceFactorSnapshot) {
 export function tiltPlan(snapshot: InfluenceFactorSnapshot) {
   const accuracyClass = normalizedClass(snapshot.accuracyClass);
   if (!classesWithTilting.has(accuracyClass)) return { status: 'NOT_APPLICABLE' as const, reason: 'A.5.1 is not applicable to Class I.' };
-  if (snapshot.mobileInstrument === true || snapshot.portableRoadVehicleInstrument === true) {
-    if (snapshot.mobileOutdoorUse === undefined) return { status: 'REQUIRES_CONFIGURATION' as const, reason: 'Mobile outdoor-use configuration is required for A.5.1.3.' };
-    return { status: 'UNSUPPORTED' as const, reason: 'The mobile/outdoor A.5.1.3 execution module is not implemented.', method: 'A.5.1.3', executionSupported: false };
-  }
+  const mobile = snapshot.mobileInstrument === true || snapshot.portableRoadVehicleInstrument === true;
+  if (mobile && snapshot.mobileOutdoorUse === undefined) return { status: 'REQUIRES_CONFIGURATION' as const, reason: 'Confirm whether this mobile instrument is used outdoors in open locations before selecting the A.5.1 procedure.' };
+  if (mobile && snapshot.mobileOutdoorUse === true) return { status: 'UNSUPPORTED' as const, reason: 'The mobile/outdoor A.5.1.3 procedure requires the specialized open-location tilt and functional-signal execution module.', method: 'A.5.1.3', executionSupported: false };
+  if (snapshot.tiltConfiguration === false) return { status: 'NOT_APPLICABLE' as const, reason: 'The instrument is explicitly configured as not liable to tilt.' };
   if (snapshot.hasLevelIndicator === true || snapshot.hasAutomaticTiltSensor === true) {
     if (!finite(snapshot.manufacturerTiltLimit)) return { status: 'REQUIRES_CONFIGURATION' as const, reason: 'The manufacturer limiting tilt is required for A.5.1.1.' };
     return { status: 'APPLICABLE' as const, reason: 'Use the manufacturer limiting tilt with the configured level indicator/automatic tilt sensor.', method: 'A.5.1.1', executionSupported: true, tiltLimit: snapshot.manufacturerTiltLimit, directions: ['LONGITUDINAL', 'TRANSVERSE'] };
@@ -157,6 +158,43 @@ export function influenceFactorsPlan(snapshot: InfluenceFactorSnapshot) {
   };
 }
 
+export type VoltageLoadCondition = '10E' | 'HALF_MAX_TO_MAX';
+export const VOLTAGE_SEQUENCE_LABELS = ['REFERENCE_START', 'LOWER', 'UPPER', 'REFERENCE_END'] as const;
+
+export function validateVoltageObservationCoverage(
+  observations: Array<{ label: string; loadCondition: VoltageLoadCondition; load: number }>,
+  snapshot: { max: number; e: number },
+) {
+  const expected = new Set(VOLTAGE_SEQUENCE_LABELS.flatMap(label => ['10E', 'HALF_MAX_TO_MAX'].map(condition => `${condition}:${label}`)));
+  const actual = observations.map(item => `${item.loadCondition}:${item.label}`);
+  if (actual.length !== expected.size || new Set(actual).size !== expected.size || actual.some(item => !expected.has(item))) {
+    return { valid: false as const, message: 'Record the reference, lower, upper, and reference-return voltage observations at both required loads: 10e and between ½ Max and Max.' };
+  }
+  const tenE = Number(snapshot.e) * 10;
+  if (observations.some(item => item.loadCondition === '10E' && Math.abs(item.load - tenE) > 1e-9)) {
+    return { valid: false as const, message: `The 10e voltage sequence must use the configured 10e test load (${tenE}).` };
+  }
+  if (observations.some(item => item.loadCondition === 'HALF_MAX_TO_MAX' && (item.load < Number(snapshot.max) / 2 || item.load > Number(snapshot.max)))) {
+    return { valid: false as const, message: 'The second voltage sequence load must be between ½ Max and Max.' };
+  }
+  return { valid: true as const };
+}
+
+export function validateWarmUpAttestation(input: { disconnectedAt: string; connectedAt: string; stabilizationAt: string; eightHourPreconditionConfirmed: boolean }) {
+  if (input.eightHourPreconditionConfirmed !== true) return { valid: false as const, message: 'Confirm that the instrument was disconnected from the supply for at least 8 hours before continuing.' };
+  const disconnectedAt = new Date(input.disconnectedAt);
+  const connectedAt = new Date(input.connectedAt);
+  const stabilizationAt = new Date(input.stabilizationAt);
+  if ([disconnectedAt, connectedAt, stabilizationAt].some(value => Number.isNaN(value.getTime()))) return { valid: false as const, message: 'Enter valid disconnect, reconnect, and stabilization times.' };
+  if (connectedAt.getTime() <= disconnectedAt.getTime()) return { valid: false as const, message: 'The reconnect time must be after the disconnect time.' };
+  const minimumDisconnectionMs = 8 * 60 * 60 * 1000;
+  if (connectedAt.getTime() - disconnectedAt.getTime() < minimumDisconnectionMs) {
+    return { valid: false as const, message: 'The recorded disconnect and reconnect times must be at least 8 hours apart.' };
+  }
+  if (stabilizationAt.getTime() < connectedAt.getTime()) return { valid: false as const, message: 'The indication cannot stabilize before the instrument is reconnected.' };
+  return { valid: true as const, disconnectedAt, connectedAt, stabilizationAt };
+}
+
 export function calculateInfluenceFactorsError(input: { load: number; indication: number; deltaL: number; e: number; zeroError?: number }) {
   const calculation = calculateChangeoverError(input.load, input.indication, input.deltaL, input.e, input.zeroError ?? 0);
   return {
@@ -172,7 +210,22 @@ export function evaluateInfluenceFactorsCompliance(snapshot: InfluenceFactorSnap
   const currentUnit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
   const normalizedLoad = convertMass(load, unit, currentUnit);
   const mpe = getMpe(String(snapshot.accuracyClass || ''), normalizedLoad, Number(snapshot.e), { min: Number(snapshot.min), max: Number(snapshot.max), unit: currentUnit, rangeType: (snapshot.rangeType || 'single-range') as any, loadType: 'GROSS' });
-  return mpe.supported ? { ...mpe, compliance: Math.abs(error) <= Math.abs(mpe.mpeValue) ? 'PASS' as const : 'FAIL' as const } : { ...mpe, compliance: 'INCOMPLETE' as const };
+  return mpe.supported ? { ...mpe, compliance: isWithinLimit(error, mpe.mpeValue, normalizedLoad) ? 'PASS' as const : 'FAIL' as const } : { ...mpe, compliance: 'INCOMPLETE' as const };
+}
+
+export function recalculateSavedTiltingObservation(snapshot: InfluenceFactorSnapshot, observation: any) {
+  const raw = observation?.raw;
+  if (!raw || !isMassUnit(raw.unit) || ![raw.load, raw.indication, raw.deltaL].every((value: unknown) => Number.isFinite(Number(value)))) {
+    throw new Error('A saved A.5.1 observation is missing its original numeric inputs or unit.');
+  }
+  const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
+  const load = convertMass(Number(raw.load), raw.unit, unit);
+  const indication = convertMass(Number(raw.indication), raw.unit, unit);
+  const deltaL = convertMass(Number(raw.deltaL), raw.unit, unit);
+  const zeroError = raw.zeroError === undefined ? 0 : convertMass(Number(raw.zeroError), raw.unit, unit);
+  const calculation = calculateInfluenceFactorsError({ load, indication, deltaL, e: Number(snapshot.e), zeroError });
+  const mpe = evaluateInfluenceFactorsCompliance(snapshot, load, unit, calculation.Ec);
+  return { ...observation, load, indication, deltaL, ...calculation, mpeValue: mpe.supported ? mpe.mpeValue : undefined, mpeUnit: unit, compliance: mpe.compliance };
 }
 
 export function influenceFactorsFingerprint(snapshot: InfluenceFactorSnapshot) {

@@ -23,7 +23,7 @@ export type DashboardApplicability = {
 export type DashboardReportCategory = 'IN_PROGRESS' | 'UNDER_REVIEW' | 'COMPLETED' | 'ATTENTION' | 'OTHER';
 
 const inProgressStatuses = new Set(['DRAFT', 'SUBMITTED', 'VERIFICATION_IN_PROGRESS', 'VERIFICATION_COMPLETED', 'TESTING']);
-const attentionStatuses = new Set(['CHANGES_REQUESTED', 'RETEST_REQUIRED', 'REJECTED']);
+const attentionStatuses = new Set(['RETEST_REQUIRED', 'REJECTED']);
 
 export function dashboardReportCategory(report: DashboardReport): DashboardReportCategory {
   const status = String(report.status || '');
@@ -39,10 +39,10 @@ export function dashboardCounts(reports: DashboardReport[]) {
     const status = String(report.status || '');
     if (status === 'TESTING') counts.activeTests += 1;
     if (status === 'AWAITING_REVIEW' || status === 'UNDER_REVIEW') counts.awaitingReview += 1;
-    if (status === 'CHANGES_REQUESTED') counts.changesRequested += 1;
     if (status === 'COMPLETED') counts.completedReports += 1;
+    if (status === 'RETEST_REQUIRED') counts.retestRequired += 1;
     return counts;
-  }, { activeTests: 0, awaitingReview: 0, changesRequested: 0, completedReports: 0 });
+  }, { activeTests: 0, awaitingReview: 0, retestRequired: 0, completedReports: 0 });
 }
 
 export function dashboardWorkflowSummary(reports: DashboardReport[]) {
@@ -51,11 +51,10 @@ export function dashboardWorkflowSummary(reports: DashboardReport[]) {
     const category = dashboardReportCategory(report);
     if (status === 'TESTING') summary.testing += 1;
     if (category === 'UNDER_REVIEW') summary.awaitingReview += 1;
-    if (status === 'CHANGES_REQUESTED') summary.changesRequested += 1;
     if (status === 'RETEST_REQUIRED') summary.retestRequired += 1;
     if (category === 'COMPLETED') summary.completed += 1;
     return summary;
-  }, { testing: 0, awaitingReview: 0, changesRequested: 0, retestRequired: 0, completed: 0 });
+  }, { testing: 0, awaitingReview: 0, retestRequired: 0, completed: 0 });
 }
 
 function reportKey(report: DashboardReport) { return String(report.testReportId || report._id || ''); }
@@ -134,15 +133,17 @@ export function dashboardSession(report: DashboardReport, details?: {
   };
   if (!details) return base;
   const currentTest = details.currentTest;
+  const status = String(report.status || '');
+  const readOnly = ['AWAITING_REVIEW', 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'COMPLETED', 'REJECTED', 'CANCELLED'].includes(status);
   return {
     ...base, category: details.category,
     currentTest: currentTest ? { code: currentTest.code, name: currentTest.name, phase: currentTest.phase } : null,
-    resumePath: details.category === 'IN_PROGRESS' || details.category === 'ATTENTION'
-      ? currentTest?.path || `/tester/reports/${reportKey(report)}`
-      : details.category === 'UNDER_REVIEW'
-        ? `/tester/reports/${reportKey(report)}/review`
+    resumePath: readOnly
+      ? `/tester/reports/${reportKey(report)}/review`
+      : details.category === 'IN_PROGRESS' || details.category === 'ATTENTION'
+        ? currentTest?.path || `/tester/reports/${reportKey(report)}`
         : `/tester/reports/${reportKey(report)}`,
-    actionLabel: details.category === 'IN_PROGRESS' ? 'Resume Testing' : details.category === 'ATTENTION' ? 'Open Attention' : 'View Report',
+    actionLabel: details.category === 'IN_PROGRESS' ? 'Resume Testing' : details.category === 'ATTENTION' && !readOnly ? 'Open Attention' : 'View Report',
     routeProgress: details.routeProgress,
   };
 }
@@ -156,7 +157,7 @@ export function buildDashboardReportView(report: DashboardReport, applicability:
 
 export function dashboardAttention(report: DashboardReport, view: ReturnType<typeof buildDashboardReportView>, applicability: DashboardApplicability[], artifacts: DashboardArtifact[]) {
   const items: Array<{ id: string; reportId?: string; testId?: string; title: string; reason: string; status: string; path: string }> = [];
-  if (view.category === 'ATTENTION') items.push({ id: `${reportKey(report)}:status`, reportId: report.testReportId, title: report.status === 'RETEST_REQUIRED' ? 'Retest required' : report.status === 'CHANGES_REQUESTED' ? 'Changes requested' : 'Report requires attention', reason: 'The report workflow contains an explicit action request.', status: String(report.status), path: view.resumePath });
+  if (view.category === 'ATTENTION') items.push({ id: `${reportKey(report)}:status`, reportId: report.testReportId, title: report.status === 'RETEST_REQUIRED' ? 'Retest required' : 'Report requires attention', reason: 'The report workflow contains an explicit action request.', status: String(report.status), path: view.resumePath });
   for (const item of applicability) {
     const test = artifactFor(artifacts, item.code);
     if (item.status === 'REQUIRES_CONFIGURATION' || item.status === 'UNSUPPORTED' || test?.status === 'REVALIDATION_REQUIRED') items.push({ id: `${reportKey(report)}:${item.code}`, reportId: report.testReportId, testId: item.code, title: `${item.code} requires attention`, reason: item.status === 'REQUIRES_CONFIGURATION' || item.status === 'UNSUPPORTED' ? item.reason || 'Configuration or execution support is required.' : 'The saved result is stale and must be revalidated.', status: item.status === 'REQUIRES_CONFIGURATION' || item.status === 'UNSUPPORTED' ? item.status : 'REVALIDATION_REQUIRED', path: testDestination(reportKey(report), item.code) });

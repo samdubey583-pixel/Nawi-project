@@ -253,8 +253,17 @@ function eccentricityEvaluation(profile: InstrumentProfile, reason: string): { s
 
   let method: 'A.4.7.1' | 'A.4.7.2' | 'A.4.7.3' | 'A.4.7.4' | 'A.4.7.5';
   let methodLabel: string;
+  let mobileClauseReason = '';
   if (profile.mobileInstrument) {
-    method = 'A.4.7.5'; methodLabel = 'Mobile instrument';
+    const supportPoints = Number(profile.numberOfSupportPoints);
+    const applicableQuarterMethod = profile.loadReceptorType === 'normal platform' && !profile.rollingLoad && supportPoints === 4;
+    if (applicableQuarterMethod) {
+      method = 'A.4.7.1';
+      methodLabel = 'Mobile instrument · applicable four-quarter platform positions';
+      mobileClauseReason = ' For this mobile instrument, A.4.7.5 applies the configured normal-platform A.4.7.1 four-quarter procedure as applicable.';
+    } else {
+      method = 'A.4.7.5'; methodLabel = 'Mobile instrument';
+    }
   } else if (profile.rollingLoad) {
     method = 'A.4.7.4'; methodLabel = 'Rolling loads';
   } else if (profile.loadReceptorType !== 'normal platform') {
@@ -268,7 +277,7 @@ function eccentricityEvaluation(profile: InstrumentProfile, reason: string): { s
   if (method === 'A.4.7.3' && (!Number.isInteger(profile.numberOfSupportPoints) || Number(profile.numberOfSupportPoints) <= 0)) return { status: 'REQUIRES_CONFIGURATION', reason: 'A positive number of support points is required for the selected special load receptor method.' };
   const positions = eccentricityPositions(method, profile.numberOfSupportPoints);
   const supported = method === 'A.4.7.1' && profile.numberOfSupportPoints === 4;
-  const executionReason = supported ? reason : `${reason} The ${method} execution module is not implemented for this configuration.`;
+  const executionReason = supported ? `${reason}${mobileClauseReason}` : `${reason} The ${method} execution module is not implemented for this configuration.`;
   return { status: 'APPLICABLE', reason: executionReason, method, methodLabel, executionSupported: supported, supportPointCount: profile.numberOfSupportPoints, positionCount: positions.length || undefined, positions: positions.length ? positions : undefined };
 }
 
@@ -367,13 +376,16 @@ function evaluate(rule: Rule, profile: InstrumentProfile): Pick<TestApplicabilit
       return { ...metadata, status: 'REQUIRES_CONFIGURATION', reason: 'Indication type, digital-indication status, and actual scale interval d are required to determine A.4.8.' };
     }
     const dInMg = toKg(Number(profile.d), profile.unit) * 1_000_000;
-    if (profile.indicationType === 'Self-indicating' && profile.digitalIndication === true && dInMg >= 5) {
+    if (profile.digitalIndication === true && dInMg >= 5) {
       return { ...metadata, status: 'APPLICABLE', reason: rule.reason, method: 'A.4.8.2', methodLabel: 'Digital indication', executionSupported: true };
     }
-    if (profile.indicationType === 'Self-indicating' && profile.digitalIndication === true && dInMg < 5) {
+    if (profile.digitalIndication === true && dInMg < 5) {
       return { ...metadata, status: 'NOT_APPLICABLE', reason: 'The digital A.4.8.2 procedure applies only where d is at least 5 mg.' };
     }
-    return { ...metadata, status: 'APPLICABLE', reason: 'A.4.8 is in scope, but the non-digital/non-self-indicating execution module is not implemented.', method: 'A.4.8.1', methodLabel: 'Non-digital or non-self-indicating indication', executionSupported: false };
+    if ((profile.rangeType !== undefined && profile.rangeType !== 'single-range') || (profile.intervalType !== undefined && profile.intervalType !== 'single-interval')) {
+      return { ...metadata, status: 'UNSUPPORTED', reason: 'The current A.4.8.1 execution module supports only a configured single-range, single-interval instrument.', method: 'A.4.8.1', methodLabel: 'Multi-range discrimination', executionSupported: false };
+    }
+    return { ...metadata, status: 'APPLICABLE', reason: 'Use the applicable analog/non-self-indicating discrimination procedure at Min, ½ Max, and Max.', method: 'A.4.8.1', methodLabel: 'Analog or non-self-indicating indication', executionSupported: true };
   }
   if (rule.kind === 'sensitivity') {
     if (!hasCoreConfiguration(profile)) return { status: 'REQUIRES_CONFIGURATION', reason: coreConfigurationReason(profile) };

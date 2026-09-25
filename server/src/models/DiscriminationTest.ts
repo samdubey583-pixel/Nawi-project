@@ -10,6 +10,8 @@ const observationSchema = new Schema({
   lowerIndication: Number, restoredIncrement: Number, appliedAdditionalLoad: Number, upperIndication: Number,
   oneTenthD: Number, onePointFourD: Number, expectedLowerIndication: Number, expectedUpperIndication: Number,
   actualLowerDifference: Number, actualUpperDifference: Number, lowerPass: Boolean, upperPass: Boolean,
+  inputDisplacement: Number, permanentDisplacement: Number, displacementThreshold: Number, requiredExtraLoad: Number,
+  visibleDisplacement: Boolean, method: String,
   result: { type: String, enum: ['PASS', 'FAIL', 'INCOMPLETE'] }, ruleReference: String, ruleVersion: String,
   notes: String, recordedAt: Date,
 }, { _id: false });
@@ -17,6 +19,7 @@ const observationSchema = new Schema({
 const stageSchema = new Schema({
   stageId: { type: String, enum: ['MIN', 'HALF_MAX', 'MAX'], required: true }, label: String, order: Number,
   targetLoad: massSchema, oneTenthD: massSchema, onePointFourD: massSchema,
+  requiredExtraLoad: massSchema,
   recommendedIncrementCount: Number,
   // Stage workflow states are persisted independently from the parent test.
   // AVAILABLE/LOCKED are used by the sequential three-load workflow, just as

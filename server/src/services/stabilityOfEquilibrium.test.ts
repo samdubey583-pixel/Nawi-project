@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateZeroSettingStabilityObservation, consolidateDocumentationDetails, evaluateContinuousDisturbance, evaluateDocumentationReview, evaluateInhibition, evaluatePrintStorageRepetition, evaluateStabilityRepetitions, evaluateStabilitySequence, stabilityPlan, STABILITY_REPETITIONS } from './stabilityOfEquilibrium.js';
+import { calculateZeroSettingStabilityObservation, consolidateDocumentationDetails, evaluateContinuousDisturbance, evaluateDocumentationReview, evaluateInhibition, evaluatePrintStorageRepetition, evaluateStabilityRepetitions, evaluateStabilitySequence, stabilityLoadL0, stabilityPlan, STABILITY_REPETITIONS } from './stabilityOfEquilibrium.js';
 
 test('A.4.12 derives the 50% Max recommendation and 1e print/storage tolerance', () => {
   const plan = stabilityPlan({ max: 100000, unit: 'g', d: 10, e: 10, differentiatedScaleDivisions: false, printingCapability: true, dataStorageCapability: true, zeroSettingCapability: true, tareCapability: true });
@@ -63,6 +63,12 @@ test('A.4.12 zero-setting and tare branches require five repetitions', () => {
   assert.equal(evaluateStabilityRepetitions(Array.from({ length: 5 }, () => ({ result: 'PASS' }))).result, 'PASS');
   assert.equal(evaluateStabilityRepetitions(Array.from({ length: 5 }, (_, index) => ({ result: index === 4 ? 'FAIL' : 'PASS' }))).result, 'FAIL');
   assert.equal(evaluateStabilityRepetitions([{ result: undefined }, { result: 'PASS' }]).validCount, 1);
+});
+
+test('A.4.12 uses L0 = 0 for zero and tare repetitions when zero tracking is confirmed OFF', () => {
+  const automaticSnapshot = { e: 0.05, zeroSettingMethod: 'automatic', zeroTracking: true };
+  assert.equal(stabilityLoadL0(automaticSnapshot, true), 0);
+  assert.equal(stabilityLoadL0(automaticSnapshot, false), 0.5);
 });
 
 test('A.4.12.3 uses the official zero-setting ΔL mapping when automatic zero-setting is OFF', () => {

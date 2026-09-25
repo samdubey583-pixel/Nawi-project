@@ -4,4 +4,5 @@
 .stability-documentation-details{grid-column:1 / -1}.stability-documentation-details small{display:block;margin-top:5px;color:#746657;line-height:1.45}.stability-documentation-details textarea{min-height:180px;margin-top:5px}
 .stability-readonly-value{border:1px solid #d8c9b5;background:#faf5eb;padding:11px;font:inherit;color:#76503b;min-height:20px}.stability-formula{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#76503b!important}.stability-zero-results-header,.stability-zero-results-row{grid-template-columns:1fr 1fr 1fr 1fr}
 .stability-operations label small{font-weight:400;color:#806f61}.stability-inhibition-result{display:flex;justify-content:space-between;align-items:center}
+.stability-retest-banner{display:grid;gap:5px;border-left-color:#8b4a2a;background:linear-gradient(120deg,#fff8ec,#f5ead8)}.stability-retest-banner p{margin:8px 0;color:#5d4b3b;line-height:1.55;overflow-wrap:anywhere}.stability-retest-banner small{display:block;margin-top:5px;color:#806f61;line-height:1.45}
 @media(max-width:760px){.stability-zero-results-header,.stability-zero-results-row{grid-template-columns:1fr 1fr}}

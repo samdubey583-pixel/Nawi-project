@@ -51,6 +51,8 @@ const testReportSchema = new Schema({
   draftPdfGeneratedAt: Date,
   draftPdfGeneratedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   draftPdfPrototype: { type: Boolean, default: false },
+  finalPdfGeneratedAt: Date,
+  finalPdfGeneratedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   auditHistory: { type: [auditEntrySchema], default: [] },
 }, { timestamps: true, collection: 'testReports' });
 

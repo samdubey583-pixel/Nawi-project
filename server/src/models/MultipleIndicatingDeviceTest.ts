@@ -5,6 +5,7 @@ const indicationSchema = new Schema({
   label: String,
   type: String,
   indication: Number,
+  inputIndication: Number,
   unit: String,
 }, { _id: false });
 

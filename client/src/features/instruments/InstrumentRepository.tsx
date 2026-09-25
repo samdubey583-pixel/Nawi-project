@@ -26,8 +26,8 @@ type InstrumentForm = typeof blank;
 const mass = (value: unknown, unit = 'g') => Number.isFinite(Number(value)) ? `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 6 }).format(Number(value))} ${unit}` : '—';
 const date = (value: unknown) => value ? new Date(String(value)).toLocaleDateString() : '—';
 
-function Field({ label, value, onChange, type = 'text', required = true, error }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean; error?: string }) {
-  return <label className={`instrument-field${error ? ' field-invalid' : ''}`}><span>{label}{required && <i> *</i>}</span><input aria-invalid={Boolean(error)} type={type} min={type === 'number' ? '0' : undefined} step={type === 'number' ? 'any' : undefined} value={value} onChange={event => onChange(event.target.value)} />{error && <small className="field-error">{error}</small>}</label>;
+function Field({ label, value, onChange, type = 'text', required = true, error, allowNegative = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean; error?: string; allowNegative?: boolean }) {
+  return <label className={`instrument-field${error ? ' field-invalid' : ''}`}><span>{label}{required && <i> *</i>}</span><input aria-invalid={Boolean(error)} type={type} min={type === 'number' && !allowNegative ? '0' : undefined} step={type === 'number' ? 'any' : undefined} value={value} onChange={event => onChange(event.target.value)} />{error && <small className="field-error">{error}</small>}</label>;
 }
 
 function Select({ label, value, onChange, options, required = true }: { label: string; value: string; onChange: (value: string) => void; options: string[]; required?: boolean }) {
@@ -61,7 +61,14 @@ function InstrumentFields({ form, set }: { form: InstrumentForm; set: (key: keyo
       <Select label="Range Configuration" value={form.rangeType} onChange={value => set('rangeType', value)} options={['single-range', 'multiple-range']} />
       <Select label="Interval Configuration" value={form.intervalType} onChange={value => set('intervalType', value)} options={['single-interval', 'multi-interval']} />
       <Select label="Tare Device Present" value={form.tareDevicePresent || form.tareDevice} onChange={value => { set('tareDevicePresent', value); set('tareDevice', value); }} options={yesNo} />
-      <p className="instrument-config-note">Detailed tare characteristics are recorded in the A.4.6 Tare workspace after the report's tare device is confirmed.</p>
+      {form.tareDevicePresent === 'Yes' && <>
+        <Select label="Tare Type" value={form.tareType} onChange={value => set('tareType', value)} options={['SUBTRACTIVE', 'ADDITIVE']} />
+        <Field label={`Maximum Tare Effect (${form.unit})`} type="number" value={form.maximumTareEffect} onChange={value => set('maximumTareEffect', value)} />
+        <Select label="Tare Operation Mode" value={form.tareOperationMode} onChange={value => set('tareOperationMode', value)} options={['NON_AUTOMATIC', 'SEMI_AUTOMATIC', 'AUTOMATIC']} />
+        <Select label="Separate Tare-weighing Device Present" value={form.tareWeighingDevicePresent} onChange={value => set('tareWeighingDevicePresent', value)} options={yesNo} />
+        <Select label="Preset Tare Device Present" value={form.presetTareDevicePresent} onChange={value => set('presetTareDevicePresent', value)} options={yesNo} />
+        <p className="instrument-config-note">These persisted tare characteristics determine A.4.6 applicability and its required procedures.</p>
+      </>}
       <Select label="Multiple Indicating Devices" value={form.multipleIndicatingDevices} onChange={value => set('multipleIndicatingDevices', value)} options={yesNo} />
       <Select label="Load Receptor / Platform Type" value={form.loadReceptorType} onChange={value => set('loadReceptorType', value)} options={['normal platform', 'other / special configuration']} />
       <Field label="Number of Support Points" type="number" required={false} value={form.numberOfSupportPoints} onChange={value => set('numberOfSupportPoints', value)} />
@@ -86,9 +93,9 @@ function InstrumentFields({ form, set }: { form: InstrumentForm; set: (key: keyo
       <Select label="Three-phase Supply" value={form.threePhaseSupply} onChange={value => set('threePhaseSupply', value)} options={yesNo} required={false} />
       <Select label="Rechargeable Battery" value={form.rechargeableBattery} onChange={value => set('rechargeableBattery', value)} options={yesNo} required={false} />
       <Select label="Battery Charges During Operation" value={form.rechargeableBatteryCanChargeDuringOperation} onChange={value => set('rechargeableBatteryCanChargeDuringOperation', value)} options={yesNo} required={false} />
-      <Field label="Specified Minimum Temperature (°C)" type="number" required={false} value={form.specifiedMinimumTemperature} onChange={value => set('specifiedMinimumTemperature', value)} />
-      <Field label="Specified Maximum Temperature (°C)" type="number" required={false} value={form.specifiedMaximumTemperature} onChange={value => set('specifiedMaximumTemperature', value)} />
-      <Field label="Manufacturer Reference Temperature (°C)" type="number" required={false} value={form.manufacturerReferenceTemperature} onChange={value => set('manufacturerReferenceTemperature', value)} />
+      <Field label="Specified Minimum Temperature (°C)" type="number" allowNegative required={false} value={form.specifiedMinimumTemperature} onChange={value => set('specifiedMinimumTemperature', value)} />
+      <Field label="Specified Maximum Temperature (°C)" type="number" allowNegative required={false} value={form.specifiedMaximumTemperature} onChange={value => set('specifiedMaximumTemperature', value)} />
+      <Field label="Manufacturer Reference Temperature (°C)" type="number" allowNegative required={false} value={form.manufacturerReferenceTemperature} onChange={value => set('manufacturerReferenceTemperature', value)} />
     </div></FormSection>
     <FormSection title="Stable-equilibrium capabilities"><div className="instrument-grid">
       <Select label="Stable-equilibrium Function" value={form.stableEquilibriumFunction} onChange={value => set('stableEquilibriumFunction', value)} options={yesNo} />
@@ -108,7 +115,7 @@ function InstrumentFields({ form, set }: { form: InstrumentForm; set: (key: keyo
     <FormSection title="Technical information"><div className="instrument-grid">
       <Field label="Software / Firmware" required={false} value={form.softwareVersion} onChange={value => set('softwareVersion', value)} />
       <Field label="Load Cell / Module" required={false} value={form.loadCellInformation} onChange={value => set('loadCellInformation', value)} />
-      <Field label="Interfaces" required={false} value={form.interfaces} onChange={value => set('interfaces', value)} />
+      <Field label="Interfaces / Communication Links" required={false} value={form.interfaces} onChange={value => set('interfaces', value)} />
       <label className="instrument-field instrument-span-two"><span>Additional Technical Notes</span><textarea value={form.additionalInformation} onChange={event => set('additionalInformation', event.target.value)} /></label>
     </div></FormSection>
   </>;

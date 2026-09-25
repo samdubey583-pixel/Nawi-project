@@ -3,7 +3,7 @@ import { getMpe } from './mpeRules.js';
 
 export const VARIATION_WITH_TIME_TEST_VERSION = 'R76-A4.11-1.0';
 export const VARIATION_WITH_TIME_SOURCE = 'OIML R 76-1:2006 §3.9.4 / Annex A A.4.11';
-export const VARIATION_WITH_TIME_ENGINE_VERSION = VARIATION_WITH_TIME_TEST_VERSION;
+export const VARIATION_WITH_TIME_ENGINE_VERSION = 'R76-A4.11-1.1';
 
 export type VariationWithTimeCheckpoint = 'T0' | 'T5' | 'T15' | 'T30' | 'T60' | 'T120' | 'T180' | 'T240';
 export type VariationWithTimeResult = 'PASS' | 'FAIL' | 'INCOMPLETE' | 'NOT_DETERMINED';
@@ -65,7 +65,9 @@ export function evaluateCreep(input: {
   const temperatures = (input.temperatures || []).filter(Number.isFinite).map(Number);
   const temperatureVariation = temperatures.length >= 2 ? precision(Math.max(...temperatures) - Math.min(...temperatures)) : undefined;
   const temperatureCondition = temperatureVariation === undefined ? 'NOT_ASSESSED' as const : temperatureVariation <= 2 ? 'SATISFIED' as const : 'NOT_SATISFIED' as const;
-  const earlyTerminationCriteriaSatisfied = delta30 !== undefined && delta15_30 !== undefined && delta30 < 0.5 * input.e && delta15_30 < 0.2 * input.e;
+  // R 76-1:2006 §3.9.4.1 says these differences "shall not exceed" the
+  // limits, so equality at either limit satisfies that individual condition.
+  const earlyTerminationCriteriaSatisfied = delta30 !== undefined && delta15_30 !== undefined && delta30 <= 0.5 * input.e && delta15_30 <= 0.2 * input.e;
   const earlyTerminationAllowed = earlyTerminationCriteriaSatisfied && temperatureCondition === 'SATISFIED';
   const delta4h = p240 === undefined || p0 === undefined ? undefined : absolute(p240 - p0);
   const extendedCriterion = delta4h === undefined || input.mpeValue === undefined ? undefined : delta4h <= Math.abs(input.mpeValue);

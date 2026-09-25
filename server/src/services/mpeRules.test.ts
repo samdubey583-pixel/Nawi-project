@@ -41,6 +41,8 @@ if (classIII.supported) {
 }
 assert.equal(evaluateCompliance(10, 10), 'PASS');
 assert.equal(evaluateCompliance(10.0001, 10), 'FAIL');
+assert.equal(evaluateCompliance(0.005000000000000782, 0.005), 'PASS');
+assert.equal(evaluateCompliance(0.0050000001, 0.005), 'FAIL');
 assert.equal(getMpe('unknown', 1, 1).supported, false);
 assert.equal(getMpe('III', 1, 0).supported, false);
 assert.equal(getMpe('III', -1, 1).supported, false);

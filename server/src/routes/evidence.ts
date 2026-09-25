@@ -7,7 +7,7 @@ import { TestReport } from '../models/TestReport.js';
 import { Evidence } from '../models/Evidence.js';
 import { MobileEvidenceSession } from '../models/MobileEvidenceSession.js';
 import { findEvidenceDefinition } from '../services/evidenceDefinitions.js';
-import { hasTesterReportAccess } from '../services/reportAccess.js';
+import { canReadEvidenceFile, hasTesterReportAccess, testerEvidenceIsLocked } from '../services/reportAccess.js';
 import { buildEvidenceCaptureUrl, createEvidenceToken, hashEvidenceToken, resolveEvidenceCaptureBaseUrl, sessionAcceptsUpload } from '../services/evidenceSession.js';
 
 const r = Router();
@@ -25,7 +25,7 @@ async function ownedReport(req: any) {
 }
 
 function lockedReport(report: any) {
-  return ['COMPLETED', 'CANCELLED', 'REJECTED'].includes(String(report.status));
+  return testerEvidenceIsLocked(report.status);
 }
 
 function publicEvidence(evidence: any) {
@@ -165,8 +165,16 @@ r.post('/evidence/mobile/:token/complete', async (req, res, next) => {
   try { const session: any = await MobileEvidenceSession.findOne({ tokenHash: hashEvidenceToken(req.params.token) }); if (!session) return res.status(404).json({ message: 'This evidence session is invalid.' }); if (session.expiresAt <= new Date()) { session.status = 'EXPIRED'; } else if (['ACTIVE', 'UPLOADING'].includes(session.status)) { session.status = 'COMPLETED'; session.completedAt = new Date(); } await session.save(); res.json({ session: publicSession(session) }); } catch (e) { next(e); }
 });
 
-r.get('/evidence/:evidenceId/file', requireAuth, requireRole('TESTER'), async (req: any, res, next) => {
-  try { const evidence: any = await Evidence.findById(req.params.evidenceId).select('+data'); if (!evidence || evidence.status !== 'ACTIVE') return res.status(404).end(); const report = await TestReport.findById(evidence.reportId); if (!report || !hasTesterReportAccess(report, req.user._id)) return res.status(404).end(); if (!evidence.data) return res.status(404).end(); res.setHeader('Content-Type', evidence.mimeType); res.setHeader('Cache-Control', 'private, max-age=300'); res.send(evidence.data); } catch (e) { next(e); }
+r.get('/evidence/:evidenceId/file', requireAuth, async (req: any, res, next) => {
+  try {
+    const evidence: any = await Evidence.findById(req.params.evidenceId).select('+data');
+    if (!evidence || evidence.status !== 'ACTIVE') return res.status(404).end();
+    const report: any = await TestReport.findById(evidence.reportId).select('status submittedBy testerId');
+    if (!report) return res.status(404).end();
+    if (!canReadEvidenceFile(report, req.user.role, req.user._id)) return res.status(404).end();
+    if (!evidence.data) return res.status(404).end();
+    res.setHeader('Content-Type', evidence.mimeType); res.setHeader('Cache-Control', 'private, max-age=300'); res.send(evidence.data);
+  } catch (e) { next(e); }
 });
 
 r.patch('/evidence/:evidenceId', requireAuth, requireRole('TESTER'), async (req: any, res, next) => {

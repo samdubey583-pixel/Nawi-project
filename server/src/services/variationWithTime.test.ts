@@ -6,6 +6,7 @@ test('creates the persisted A.4.11 timeline and close-to-Max recommendation', ()
   const plan = variationWithTimePlan({ accuracyClass: 'III', min: 200, max: 30000, e: 10, unit: 'g', rangeType: 'single-range', intervalType: 'single-interval' });
   assert.equal(plan.executionSupported, true);
   assert.equal(plan.recommendedLoad.value, 30000);
+  assert.equal(plan.engineVersion, 'R76-A4.11-1.1');
   assert.deepEqual(plan.creepCheckpoints.map(item => item.checkpoint), ['T0', 'T5', 'T15', 'T30', 'T60', 'T120', 'T180', 'T240']);
 });
 
@@ -28,11 +29,17 @@ test('fails early termination when the 30-minute corrected change exceeds 0.5e',
   assert.equal(result.requiredCheckpoint, 'T240');
 });
 
-test('uses strict 30-minute creep inequalities', () => {
+test('accepts the inclusive 30-minute creep limits from R 76-1 §3.9.4.1', () => {
   const passing = evaluateCreep({ i0: 100, i15: 103, i30: 104.9, deltaL0: 0, deltaL15: 0, deltaL30: 0, e: 10, temperatures: [23, 25] });
   assert.equal(passing.earlyTerminationAllowed, true);
   assert.equal(passing.result, 'PASS');
-  assert.equal(evaluateCreep({ i0: 100, i15: 102, i30: 105, deltaL0: 0, deltaL15: 0, deltaL30: 0, e: 10, temperatures: [23, 25] }).earlyTerminationAllowed, false);
+  const exactHalfE = evaluateCreep({ i0: 100, i15: 105, i30: 105, deltaL0: 0, deltaL15: 0, deltaL30: 0, e: 10, temperatures: [23, 25] });
+  assert.equal(exactHalfE.delta30, 5);
+  assert.equal(exactHalfE.earlyTerminationAllowed, true);
+  const exactPointTwoE = evaluateCreep({ i0: 100, i15: 102, i30: 104, deltaL0: 0, deltaL15: 0, deltaL30: 0, e: 10, temperatures: [23, 25] });
+  assert.equal(exactPointTwoE.delta15_30, 2);
+  assert.equal(exactPointTwoE.earlyTerminationAllowed, true);
+  assert.equal(evaluateCreep({ i0: 100, i15: 102, i30: 105.01, deltaL0: 0, deltaL15: 0, deltaL30: 0, e: 10, temperatures: [23, 25] }).earlyTerminationAllowed, false);
   assert.equal(evaluateCreep({ i0: 100, i15: 103, i30: 104.9, deltaL0: 0, deltaL15: 0, deltaL30: 0, e: 10, temperatures: [23, 25.1] }).temperatureCondition, 'NOT_SATISFIED');
 });
 

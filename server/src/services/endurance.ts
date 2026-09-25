@@ -96,4 +96,17 @@ export function canSkipPhaseTwoForPrototype(input: { completedCycles?: number; t
   return Number(input.syntheticCycles || 0) > 0 && Number(input.completedCycles || 0) === target;
 }
 
+export function phaseTwoCompletionState(synthetic: boolean) {
+  return {
+    cycleState: 'COMPLETED' as const,
+    phase2Status: 'COMPLETED' as const,
+    phase2Result: 'PASS' as const,
+    phase3Status: 'AVAILABLE' as const,
+    phase3Result: 'INCOMPLETE' as const,
+    message: synthetic
+      ? 'Synthetic prototype count reached 100,000. Post-endurance weighing is available for the prototype workflow; the data remains non-legal evidence.'
+      : 'Exactly 100,000 endurance applications recorded. Post-endurance weighing is available.',
+  };
+}
+
 export function enduranceFingerprint(snapshot: EnduranceSnapshot) { return JSON.stringify(snapshot); }

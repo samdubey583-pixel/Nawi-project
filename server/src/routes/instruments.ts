@@ -4,7 +4,25 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import { Instrument } from '../models/Instrument.js';
 import { TestReport } from '../models/TestReport.js';
 import { WeighingPerformanceTest } from '../models/WeighingPerformanceTest.js';
+import { ZeroCheckingTest } from '../models/ZeroCheckingTest.js';
+import { ZeroSettingBeforeLoadingTest } from '../models/ZeroSettingBeforeLoadingTest.js';
+import { MultipleIndicatingDeviceTest } from '../models/MultipleIndicatingDeviceTest.js';
+import { TareTest } from '../models/TareTest.js';
+import { EccentricityTest } from '../models/EccentricityTest.js';
+import { DiscriminationTest } from '../models/DiscriminationTest.js';
+import { SensitivityTest } from '../models/SensitivityTest.js';
+import { RepeatabilityTest } from '../models/RepeatabilityTest.js';
+import { VariationWithTimeTest } from '../models/VariationWithTimeTest.js';
+import { StabilityOfEquilibriumTest } from '../models/StabilityOfEquilibriumTest.js';
+import { InfluenceFactorsTest } from '../models/InfluenceFactorsTest.js';
+import { EnduranceTest } from '../models/EnduranceTest.js';
+import { Evidence } from '../models/Evidence.js';
+import { VerificationSession } from '../models/VerificationSession.js';
+import { MobileEvidenceSession } from '../models/MobileEvidenceSession.js';
+import { ReportMessage } from '../models/ReportMessage.js';
+import { RetestRequest } from '../models/RetestRequest.js';
 import { validateScaleIntervals } from '../services/scaleInterval.js';
+import { deleteInstrumentReportGraph } from '../services/instrumentDeletion.js';
 
 const r = Router();
 const text = z.string().trim().min(1);
@@ -86,13 +104,18 @@ function reportInstrumentSnapshot(instrument: any) {
 }
 
 function statusFor(reports: any[], performanceByReport: Map<string, any>) {
-  const active = reports.find(report => performanceByReport.get(String(report._id))?.status === 'IN_PROGRESS' || (['VERIFICATION', 'TESTING'].includes(report.stage) && report.status !== 'COMPLETED'));
-  if (active) return { status: 'Test In Progress', activeReportId: active.testReportId };
   const latest = reports[0];
+  if (!latest) return { status: 'Not Tested', activeReportId: undefined };
   const latestPerformance = latest ? performanceByReport.get(String(latest._id)) : undefined;
+  if (latest.status === 'AWAITING_REVIEW') return { status: 'Awaiting Review', activeReportId: undefined };
+  if (latest.status === 'UNDER_REVIEW') return { status: 'Under Review', activeReportId: undefined };
+  if (latest.status === 'REJECTED') return { status: 'Rejected', activeReportId: undefined };
+  if (latest.status === 'CANCELLED') return { status: 'Cancelled', activeReportId: undefined };
+  if (latest.status === 'TESTING' || latest.status === 'VERIFICATION' || latest.status === 'VERIFICATION_IN_PROGRESS' || latestPerformance?.status === 'IN_PROGRESS') return { status: 'Test In Progress', activeReportId: latest.testReportId };
+  if (latest.status === 'COMPLETED' && latestPerformance?.result === 'PASS') return { status: 'Passed', activeReportId: undefined };
+  if (latest.status === 'COMPLETED' && latestPerformance?.result === 'FAIL') return { status: 'Failed', activeReportId: undefined };
   if (latestPerformance?.result === 'PASS') return { status: 'Passed', activeReportId: undefined };
-  if (latestPerformance?.result === 'FAIL') return { status: 'Issues Found', activeReportId: undefined };
-  if (latest?.status === 'UNDER_REVIEW' || latest?.status === 'AWAITING_REVIEW') return { status: 'Needs Review', activeReportId: undefined };
+  if (latestPerformance?.result === 'FAIL') return { status: 'Failed', activeReportId: undefined };
   return { status: 'Not Tested', activeReportId: undefined };
 }
 
@@ -106,6 +129,7 @@ async function withHistory(instrument: any) {
     instrument: instrument.toObject ? instrument.toObject() : instrument,
     status: status.status,
     activeReportId: status.activeReportId,
+    latestReport: latest ? { testReportId: latest.testReportId, status: latest.status, stage: latest.stage, result: performanceByReport.get(String(latest._id))?.result || null, reviewComment: latest.reviewComment || '', reviewerName: latest.reviewerNameSnapshot || '', reviewedAt: latest.reviewedAt || null, prototype: Boolean((latest as any).prototype) } : null,
     lastTest: latest ? { testReportId: latest.testReportId, date: latest.updatedAt || latest.createdAt, result: performanceByReport.get(String(latest._id))?.result || null } : null,
     testCount: reports.length,
     history: reports.map(report => ({ testReportId: report.testReportId, date: report.updatedAt || report.createdAt, stage: report.stage, status: report.status, result: performanceByReport.get(String(report._id))?.result || null })),
@@ -143,6 +167,29 @@ r.patch('/:id', async (req: any, res, next) => {
     await Promise.all(activeReports.map(report => { report.instrument = { ...((report.instrument as any)?.toObject?.() || report.instrument || {}), ...snapshot }; return report.save(); }));
     res.json({ instrument: instrument.toObject() });
   } catch (e: any) { if (e?.code === 11000) return res.status(409).json({ message: 'Instrument already registered.', code: 'INSTRUMENT_EXISTS' }); next(e); }
+});
+
+r.delete('/:id', async (req: any, res, next) => {
+  try {
+    const instrument = await Instrument.findOne({ _id: req.params.id, registeredBy: req.user._id });
+    if (!instrument) return res.status(404).json({ message: 'Instrument not found.' });
+    const linkedReports = await TestReport.find({ $or: [{ instrumentId: instrument._id }, { 'instrument.serialNumber': instrument.serialNumber }] }).select('_id submittedBy testerId').lean();
+    const foreignReports = linkedReports.filter(report => String(report.submittedBy) !== String(req.user._id) && String(report.testerId || '') !== String(req.user._id));
+    if (foreignReports.length) return res.status(409).json({ message: 'This instrument has reports associated with another tester account. Those records were kept; ask an administrator to reconcile ownership before deleting the instrument.', code: 'INSTRUMENT_HAS_FOREIGN_HISTORY', reportCount: foreignReports.length });
+    const reportIds = linkedReports.map(report => report._id);
+    const dependentModels: any[] = [
+      ZeroCheckingTest, ZeroSettingBeforeLoadingTest, WeighingPerformanceTest,
+      MultipleIndicatingDeviceTest, TareTest, EccentricityTest, DiscriminationTest,
+      SensitivityTest, RepeatabilityTest, VariationWithTimeTest, StabilityOfEquilibriumTest,
+      InfluenceFactorsTest, EnduranceTest, VerificationSession, Evidence,
+      MobileEvidenceSession, ReportMessage, RetestRequest,
+    ];
+    // Remove the complete instrument-owned report graph, children before parents.
+    // Keep the instrument until last so a failed dependent delete is safely retryable.
+    const deletion = await deleteInstrumentReportGraph(reportIds, dependentModels, TestReport as any);
+    await Instrument.deleteOne({ _id: instrument._id });
+    res.json({ deleted: true, instrumentId: String(instrument._id), ...deletion });
+  } catch (e) { next(e); }
 });
 
 r.get('/:id', async (req: any, res, next) => {

@@ -15,7 +15,7 @@ const mobileEvidenceSessionSchema = new Schema({
   testName: { type: String, default: '' },
   oimlReference: { type: String, default: '' },
   status: { type: String, enum: ['CREATED', 'ACTIVE', 'UPLOADING', 'COMPLETED', 'EXPIRED', 'CANCELLED'], default: 'ACTIVE', index: true },
-  expiresAt: { type: Date, required: true, index: true },
+  expiresAt: { type: Date, required: true },
   lastUploadedAt: Date,
   completedAt: Date,
   cancelledAt: Date,

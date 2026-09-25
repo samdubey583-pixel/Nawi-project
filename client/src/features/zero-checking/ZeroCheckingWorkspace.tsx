@@ -23,6 +23,7 @@ export default function ZeroCheckingWorkspace() {
   const [report, setReport] = useState<any>();
   const [applicability, setApplicability] = useState<any>();
   const [test, setTest] = useState<any>();
+  const [retestRequest, setRetestRequest] = useState<any>(null);
   const [form, setForm] = useState<FormState>(empty);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -31,10 +32,21 @@ export default function ZeroCheckingWorkspace() {
     try {
       const response = await axios.get(`/test-reports/${reportId}/zero-checking`);
       const loadedTest = response.data.test;
+      const loadedReport = response.data.report;
       const persistedUnit = loadedTest?.phases?.map((phase: any) => phase.observations?.unit || phase.observations?.inputUnit).find((unit: unknown): unit is string => typeof unit === 'string' && unit.length > 0);
-      setReport(response.data.report);
+      setReport(loadedReport);
       setApplicability(response.data.applicability);
       setTest(loadedTest);
+      if (loadedReport?.status === 'RETEST_REQUIRED') {
+        try {
+          const retestResponse = await axios.get(`/test-reports/${reportId}/retest`);
+          setRetestRequest(retestResponse.data.retestRequest || null);
+        } catch {
+          setRetestRequest(null);
+        }
+      } else {
+        setRetestRequest(null);
+      }
       if (persistedUnit || loadedTest?.instrumentSnapshot?.unit) setForm(current => ({ ...current, unit: persistedUnit || loadedTest.instrumentSnapshot.unit }));
     } catch (e: any) { setError(e.response?.data?.message || 'Unable to load Checking of Zero.'); }
   };
@@ -63,6 +75,7 @@ export default function ZeroCheckingWorkspace() {
   if (!applicability || applicability.status !== 'APPLICABLE') return <main className="zero-checking-page"><Header reportId={reportId} /><section className="zero-checking-content"><div className="zero-checking-error"><h1>Checking of Zero unavailable</h1><p>{applicability?.reason || 'Instrument configuration is required before this procedure can start.'}</p><Link className="zero-secondary" to={`/tester/reports/${reportId}/testing`}>Back to Testing</Link></div></section></main>;
   return <main className="zero-checking-page"><Header reportId={reportId} /><section className="zero-checking-content">
     <div className="zero-checking-heading"><div><span className="technical-label">A.4.2 · OIML R 76-1:2006 ANNEX A</span><h1>Checking of Zero</h1><p>{report.testReportId} · Follow the applicable zero-setting procedure and record the observed evidence.</p></div><span className={`zero-status ${test?.status === 'COMPLETED' ? 'complete' : ''}`}>{test?.status === 'COMPLETED' ? `COMPLETED · ${test.result}` : test ? 'IN PROGRESS' : 'NOT STARTED'}</span></div>
+    {retestRequest?.testCode === 'A.4.2' && <section className="zero-retest-banner" role="status"><div><span className="technical-label">RETEST REQUIRED · {retestRequest.testCode}</span><h2>{retestRequest.testName || 'Checking of Zero'}</h2><p>The reviewer requested a new attempt for this test. Update and save only the A.4.2 observations below; the other report tests remain locked.</p>{retestRequest.reason && <p><strong>Reviewer reason:</strong> {retestRequest.reason}</p>}{retestRequest.instructions && <p><strong>Retest instructions:</strong> {retestRequest.instructions}</p>}<p className="zero-retest-next"><strong>Next step:</strong> enter the new observed values, complete the requested phases, then return to the report review page and submit the retest for reviewer assessment.</p></div><Link className="zero-secondary" to={`/tester/reports/${reportId}/review`}>View Retest Request</Link></section>}
     <section className="zero-stepper" aria-label="Checking of Zero phases">{phases.map(([code, name], index) => { const phase = test?.phases?.find((item: any) => item.code === code) || applicability.phases?.find((item: any) => item.code === code); const status = phase?.status || phase?.applicability || 'REQUIRES_CONFIGURATION'; return <div className={`zero-step ${status.toLowerCase()}`} key={code}><span>{status === 'COMPLETED' ? <Check size={16} /> : status === 'LOCKED' ? <Lock size={15} /> : index + 1}</span><div><strong>Phase {index + 1}</strong><b>{name}</b><small>{code} · {status.replace(/_/g, ' ')}</small></div></div>; })}</section>
     {!test ? <section className="zero-panel zero-start"><Play size={24} /><div><h2>Begin the zero-checking procedure</h2><p>The test will create an editable record for the applicable A.4.2 phases. No observations are generated automatically.</p></div><button className="zero-primary" onClick={begin} disabled={busy}><Play size={16} /> Begin Checking of Zero</button></section> : <>
       {test.status === 'COMPLETED' ? <section className="zero-panel zero-complete"><Check size={25} /><div><h2>Checking of Zero completed</h2><p>All applicable phases have been recorded. Result: <strong>{test.result}</strong>.</p>{test.phases?.find((phase: any) => phase.code === 'A.4.2.3')?.calculations && <CalculationDetails calculations={test.phases.find((phase: any) => phase.code === 'A.4.2.3').calculations} unit={instrumentUnit} />}<Link className="zero-primary" to={`/tester/reports/${reportId}/testing`}>Return to Test Route</Link></div></section> : activePhase && <PhaseForm key={activePhase.code} phase={activePhase} form={form} set={set} instrumentUnit={instrumentUnit} d={Number(test?.instrumentSnapshot?.d)} max={Number(test?.instrumentSnapshot?.max)} automaticZeroSetting={test?.instrumentSnapshot?.zeroSettingMethod === 'Automatic'} onSave={savePhase} busy={busy} />}

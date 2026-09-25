@@ -10,9 +10,11 @@ const units = ['mg', 'g', 'kg', 't'];
 type FormState = { tareValue: string; grossLoad: string; indicationI: string; deltaL: string; direction: 'INCREASING' | 'DECREASING'; unit: string; notes: string };
 type TareSettingFormState = { tareLoad: string; indicationI0: string; deltaL: string; unit: string; notes: string };
 type TareDeviceFormState = { referenceTare: string; tareDeviceIndication: string; mainIndication: string; unit: string; notes: string };
+type TareConfigurationFormState = { tareType: string; maximumTareEffect: string; maximumTareUnit: string; tareOperationMode: string; tareWeighingDevicePresent: string; presetTareDevicePresent: string };
 const empty: FormState = { tareValue: '', grossLoad: '', indicationI: '', deltaL: '', direction: 'INCREASING', unit: 'g', notes: '' };
 const emptyTareSetting: TareSettingFormState = { tareLoad: '', indicationI0: '', deltaL: '', unit: 'g', notes: '' };
 const emptyTareDevice: TareDeviceFormState = { referenceTare: '', tareDeviceIndication: '', mainIndication: '', unit: 'g', notes: '' };
+const emptyTareConfiguration: TareConfigurationFormState = { tareType: '', maximumTareEffect: '', maximumTareUnit: 'g', tareOperationMode: '', tareWeighingDevicePresent: '', presetTareDevicePresent: '' };
 const displayMass = (value: unknown, unit: string) => Number.isFinite(Number(value)) ? `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 6 }).format(Number(value))} ${unit}` : '—';
 const unitFactors: Record<string, number> = { mg: 0.001, g: 1, kg: 1000, t: 1000000 };
 const displayConvertedMass = (value: unknown, fromUnit: string, toUnit: string) => Number.isFinite(Number(value)) && unitFactors[fromUnit] && unitFactors[toUnit] ? displayMass(Number(value) * unitFactors[fromUnit] / unitFactors[toUnit], toUnit) : '—';
@@ -26,6 +28,8 @@ export default function TareWorkspace() {
   const [form, setForm] = useState<FormState>(empty);
   const [tareSettingForm, setTareSettingForm] = useState<TareSettingFormState>(emptyTareSetting);
   const [tareDeviceForm, setTareDeviceForm] = useState<TareDeviceFormState>(emptyTareDevice);
+  const [tareConfigurationForm, setTareConfigurationForm] = useState<TareConfigurationFormState>(emptyTareConfiguration);
+  const [savingConfiguration, setSavingConfiguration] = useState(false);
   const [editingTareObservation, setEditingTareObservation] = useState<string | null>(null);
   const [editingTareLoadObservation, setEditingTareLoadObservation] = useState<string | null>(null);
   const [editingTareDeviceObservation, setEditingTareDeviceObservation] = useState<string | null>(null);
@@ -40,6 +44,8 @@ export default function TareWorkspace() {
       setForm(current => ({ ...current, unit }));
       setTareSettingForm(current => ({ ...current, unit }));
       setTareDeviceForm(current => ({ ...current, unit, referenceTare: current.referenceTare || String(response.data.test?.phases?.find((phase: any) => phase.code === 'A.4.6.1')?.observations?.at(-1)?.tareValue ?? '') }));
+      const configuration = response.data.report?.instrument || {};
+      setTareConfigurationForm({ tareType: configuration.tareType || '', maximumTareEffect: configuration.maximumTareEffect?.value == null ? '' : String(configuration.maximumTareEffect.value), maximumTareUnit: configuration.maximumTareEffect?.unit || unit, tareOperationMode: configuration.tareOperationMode || '', tareWeighingDevicePresent: configuration.tareWeighingDevicePresent == null ? '' : configuration.tareWeighingDevicePresent ? 'Yes' : 'No', presetTareDevicePresent: configuration.presetTareDevicePresent == null ? '' : configuration.presetTareDevicePresent ? 'Yes' : 'No' });
     }).catch(e => { if (active) setError(e.response?.data?.message || 'Unable to load Tare.'); });
     return () => { active = false; };
   }, [reportId]);
@@ -47,8 +53,20 @@ export default function TareWorkspace() {
   const update = (key: keyof FormState, value: string) => setForm(current => ({ ...current, [key]: value }));
   const updateTareSetting = (key: keyof TareSettingFormState, value: string) => setTareSettingForm(current => ({ ...current, [key]: value }));
   const updateTareDevice = (key: keyof TareDeviceFormState, value: string) => setTareDeviceForm(current => ({ ...current, [key]: value }));
+  const updateTareConfiguration = (key: keyof TareConfigurationFormState, value: string) => setTareConfigurationForm(current => ({ ...current, [key]: value }));
 
   const start = async () => { setError(''); try { const response = await axios.post(`/test-reports/${reportId}/tare/start`); setState((current: any) => ({ ...current, test: response.data.test })); } catch (e: any) { setError(e.response?.data?.message || 'Unable to start Tare.'); } };
+  const saveTareConfiguration = async () => {
+    setError('');
+    if (!Number.isFinite(Number(tareConfigurationForm.maximumTareEffect)) || Number(tareConfigurationForm.maximumTareEffect) <= 0) { setError('Enter a positive maximum tare effect.'); return; }
+    if (!tareConfigurationForm.tareType || !tareConfigurationForm.tareOperationMode || !['Yes', 'No'].includes(tareConfigurationForm.tareWeighingDevicePresent) || !['Yes', 'No'].includes(tareConfigurationForm.presetTareDevicePresent)) { setError('Complete each tare characteristic before saving.'); return; }
+    setSavingConfiguration(true);
+    try {
+      const response = await axios.patch(`/test-reports/${reportId}/tare/configuration`, { tareType: tareConfigurationForm.tareType, maximumTareEffect: { value: Number(tareConfigurationForm.maximumTareEffect), unit: tareConfigurationForm.maximumTareUnit }, tareOperationMode: tareConfigurationForm.tareOperationMode, tareWeighingDevicePresent: tareConfigurationForm.tareWeighingDevicePresent === 'Yes', presetTareDevicePresent: tareConfigurationForm.presetTareDevicePresent === 'Yes' });
+      setState((current: any) => ({ ...current, report: response.data.report, applicability: response.data.applicability }));
+    } catch (e: any) { setError(e.response?.data?.message || 'Unable to save the report tare configuration.'); }
+    finally { setSavingConfiguration(false); }
+  };
   const submitObservation = async (complete = false) => { setError(''); const errors = { tareValue: requiredNumericError(form.tareValue, 'Tare value used'), grossLoad: requiredNumericError(form.grossLoad, 'Gross load'), indicationI: requiredNumericError(form.indicationI, 'Indication I'), deltaL: requiredNumericError(form.deltaL, 'ΔL') }; if (Object.values(errors).some(Boolean)) { setError('Complete all required numeric observation fields before recording.'); return; } try { const payload = { unit: form.unit, observation: { tareValue: Number(form.tareValue), grossLoad: Number(form.grossLoad), indicationI: Number(form.indicationI), deltaL: Number(form.deltaL), direction: form.direction, notes: form.notes }, complete: editingTareLoadObservation ? false : complete }; const endpoint = editingTareLoadObservation ? `/test-reports/${reportId}/tare/phases/A.4.6.1/observations/${encodeURIComponent(editingTareLoadObservation)}` : `/test-reports/${reportId}/tare/phases/A.4.6.1`; const response = await axios.patch(endpoint, payload); setState((current: any) => ({ ...current, test: response.data.test })); setForm(current => ({ ...empty, unit: current.unit })); setEditingTareLoadObservation(null); } catch (e: any) { setError(e.response?.data?.message || 'Unable to save tare observation.'); } };
   const submitAccuracy = async (complete = false) => {
     setError('');
@@ -104,6 +122,13 @@ export default function TareWorkspace() {
       setState((current: any) => ({ ...current, test: response.data.test }));
     } catch (e: any) { setError(e.response?.data?.message || 'Unable to complete tare-device comparison.'); }
   };
+  const completeTareSetting = async () => {
+    setError('');
+    try {
+      const response = await axios.patch(`/test-reports/${reportId}/tare/phases/A.4.6.2`, { complete: true });
+      setState((current: any) => ({ ...current, test: response.data.test }));
+    } catch (e: any) { setError(e.response?.data?.message || 'Unable to complete tare-setting accuracy.'); }
+  };
   const editTareDeviceObservation = (observation: any) => {
     const unit = observation.unit || state?.test?.instrumentSnapshot?.unit || state?.report?.instrument?.unit || 'g';
     setEditingTareDeviceObservation(observationIdentity(observation));
@@ -154,6 +179,7 @@ export default function TareWorkspace() {
     <header className="tare-header"><Link to={`/tester/reports/${reportId}/testing`}><ArrowLeft size={16} /> Test route</Link><span>OIML R 76-1:2006 · A.4.6</span></header>
     <section className="tare-content"><div className="tare-title"><div><span className="technical-label">TESTING · TARE</span><h1>Tare</h1><p>Review the report configuration before recording observations. Net-load MPE is determined from the actual evaluated net load.</p></div><span className="tare-status">{statusLabel}</span></div>
       {error && <div className="tare-error">{error}</div>}
+      {state.retestRequest?.targetPhaseCode && <aside className="tare-retest-notice" role="status"><strong>Retest requested · {state.retestRequest.targetPhaseCode}</strong><p>{state.retestRequest.reason}</p>{state.retestRequest.instructions && <p>{state.retestRequest.instructions}</p>}<small>Only this phase is reopened. Previously completed tare phases and their recorded observations remain preserved.</small></aside>}
       {!test && state.applicability?.status === 'NOT_APPLICABLE' && <section className="tare-start"><h2>A.4.6 Tare</h2><p>{state.applicability.reason}</p></section>}
       {!test && state.applicability?.status !== 'NOT_APPLICABLE' && <>
         <section className="tare-configuration"><div><span className="technical-label">FROM INSTRUMENT CONFIGURATION</span><h2>Tare Configuration</h2><p>{configurationRequired ? 'Complete the tare characteristics in the instrument/report configuration before starting this test.' : 'These characteristics are inherited from the selected instrument/report configuration.'}</p></div>
@@ -165,7 +191,8 @@ export default function TareWorkspace() {
             <div><dt>Preset tare device</dt><dd>{yesNo(configurationSource.presetTareDevicePresent)}</dd></div>
           </dl>
           {blocked && <div className="tare-dependency-warning">{missingPrerequisites.length ? `Complete ${missingPrerequisites.map((item: any) => item.code).join(', ')} before starting Tare.` : 'Complete the preceding applicable tests before starting Tare.'}</div>}
-          <div className="tare-config-actions"><button className="route-secondary" onClick={start} disabled={!configurationReady || blocked}><Play size={15} /> Start Test</button></div>
+          {configurationRequired && <div className="tare-config-edit"><span className="technical-label">REPORT CONFIGURATION</span><h3>Complete tare characteristics</h3><p>Saved to this active report only. Existing instrument records and other reports are unchanged.</p><div className="tare-config-form"><label>Tare type<select value={tareConfigurationForm.tareType} onChange={event => updateTareConfiguration('tareType', event.target.value)}><option value="">Select type</option><option value="SUBTRACTIVE">Subtractive</option><option value="ADDITIVE">Additive</option></select></label><label>Maximum tare effect<input type="number" min="0" step="any" value={tareConfigurationForm.maximumTareEffect} onChange={event => updateTareConfiguration('maximumTareEffect', event.target.value)} /></label><label>Unit<select value={tareConfigurationForm.maximumTareUnit} onChange={event => updateTareConfiguration('maximumTareUnit', event.target.value)}>{units.map(unit => <option key={unit}>{unit}</option>)}</select></label><label>Tare operation mode<select value={tareConfigurationForm.tareOperationMode} onChange={event => updateTareConfiguration('tareOperationMode', event.target.value)}><option value="">Select mode</option><option value="NON_AUTOMATIC">Non-automatic</option><option value="SEMI_AUTOMATIC">Semi-automatic</option><option value="AUTOMATIC">Automatic</option></select></label><label>Tare weighing device<select value={tareConfigurationForm.tareWeighingDevicePresent} onChange={event => updateTareConfiguration('tareWeighingDevicePresent', event.target.value)}><option value="">Select</option><option>Yes</option><option>No</option></select></label><label>Preset tare device<select value={tareConfigurationForm.presetTareDevicePresent} onChange={event => updateTareConfiguration('presetTareDevicePresent', event.target.value)}><option value="">Select</option><option>Yes</option><option>No</option></select></label></div><small className="tare-field-hint">Use the prototype profile’s intended configuration. Do not enter a value inconsistent with the instrument’s declared Max or tare capability.</small><div className="tare-config-actions"><button className="route-primary" onClick={() => void saveTareConfiguration()} disabled={savingConfiguration}>{savingConfiguration ? 'Saving…' : 'Save report configuration'}</button></div></div>}
+          {!configurationRequired && <div className="tare-config-actions"><button className="route-secondary" onClick={start} disabled={!configurationReady || blocked}><Play size={15} /> Start Test</button></div>}
         </section>
       </>}
       {test && revalidationRequired && <section className="tare-start tare-revalidation"><h2>Revalidation required</h2><p>The tare configuration or its A.4.2 source evidence changed after execution began. Existing observations are preserved; the test must be revalidated before it can contribute to the route.</p></section>}
@@ -182,6 +209,7 @@ export default function TareWorkspace() {
             </>}
             {item.code === 'A.4.6.2' && editable && !a462CanAddObservation && !editingTareObservation && <p className="tare-workflow-note">The required {a462RequiredRepetitions} valid repetitions are recorded. Edit or delete an existing repetition before recording a replacement.</p>}
             {item.code === 'A.4.6.2' && a462Completion && <div className="tare-coverage-summary"><span>Valid repetitions <b>{a462Completion.validRepetitions} / {a462Completion.requiredRepetitions}</b></span><span>{a462Completion.complete ? `Result ${a462Completion.result}` : a462Completion.reason}</span></div>}
+            {item.code === 'A.4.6.2' && item.status === 'IN_PROGRESS' && a462Completion?.complete && !editingTareObservation && <div className="tare-form"><button className="route-primary" onClick={() => void completeTareSetting()}>Complete tare-setting test</button><small className="tare-field-hint">All required repetitions are saved. Complete the phase to advance the tare workflow.</small></div>}
             {item.code === 'A.4.6.3' && item.applicability === 'APPLICABLE' && editable && (a463ObservationCount === 0 || editingTareDeviceObservation) && <>
               <p className="tare-workflow-note">Compare the result of the tare-weighing device with the result of the main indicating device for the same tare load.</p>
               <div className="tare-form"><label>Observation unit<select value={tareDeviceForm.unit} onChange={event => updateTareDevice('unit', event.target.value)}>{units.map(unit => <option key={unit}>{unit}</option>)}</select></label><label>Reference tare ({tareDeviceForm.unit})<input aria-invalid={Boolean(a463Errors.referenceTare)} value={tareDeviceForm.referenceTare} onChange={event => updateTareDevice('referenceTare', event.target.value)} type="number" min="0" />{a463Errors.referenceTare && <small className="tare-field-error">{a463Errors.referenceTare}</small>}{tareDeviceForm.referenceTare && <small className="tare-field-hint">Prefilled from a completed A.4.6.1 tare observation; confirm or correct the actual comparison load.</small>}</label><label>Tare-weighing-device result ({tareDeviceForm.unit})<input aria-invalid={Boolean(a463Errors.tareDeviceIndication)} value={tareDeviceForm.tareDeviceIndication} onChange={event => updateTareDevice('tareDeviceIndication', event.target.value)} type="number" />{a463Errors.tareDeviceIndication && <small className="tare-field-error">{a463Errors.tareDeviceIndication}</small>}</label><label>Main indicating-device result ({tareDeviceForm.unit})<input aria-invalid={Boolean(a463Errors.mainIndication)} value={tareDeviceForm.mainIndication} onChange={event => updateTareDevice('mainIndication', event.target.value)} type="number" />{a463Errors.mainIndication && <small className="tare-field-error">{a463Errors.mainIndication}</small>}</label><label className="tare-form-wide">Notes<textarea value={tareDeviceForm.notes} onChange={event => updateTareDevice('notes', event.target.value)} /></label><div>{editingTareDeviceObservation ? <><button className="route-primary" disabled={!a463Ready} onClick={() => void submitTareDevice()}>Save changes</button><button className="route-secondary" onClick={cancelTareDeviceEdit}>Cancel edit</button></> : <button className="route-primary" disabled={!a463Ready} onClick={() => void submitTareDevice()}>Record observation</button>}</div></div>

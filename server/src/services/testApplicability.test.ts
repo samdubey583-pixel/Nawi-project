@@ -142,13 +142,14 @@ test('selects the A.4.3 automatic path and its A.4.2.3 dependency', () => {
   assert.match(result.reason, /A\.4\.2\.3/);
 });
 
-test('does not guess the A.4.3 method or route non-digital instruments through the digital module', () => {
+test('does not guess the A.4.3 method and supports the non-automatic digital procedure', () => {
   assert.equal(resultFor(baseProfile({ zeroSettingMethod: undefined }), 'A.4.3').status, 'REQUIRES_CONFIGURATION');
-  assert.equal(resultFor(baseProfile({ digitalIndication: false }), 'A.4.3').status, 'UNSUPPORTED');
+  assert.equal(resultFor(baseProfile({ digitalIndication: false }), 'A.4.3').status, 'NOT_APPLICABLE');
   const nonAutomatic = resultFor(baseProfile({ zeroSettingMethod: 'Non-automatic', zeroTracking: false }), 'A.4.3');
   assert.equal(nonAutomatic.status, 'APPLICABLE');
   assert.equal(nonAutomatic.method, 'A.4.3(a)');
-  assert.equal(nonAutomatic.executionSupported, false);
+  assert.equal(nonAutomatic.executionSupported, true);
+  assert.equal(nonAutomatic.dependency, undefined);
 });
 
 test('normalizes report instrument records for the engine', () => {
@@ -205,12 +206,33 @@ test('uses A.4.7.1 for one to four supports and A.4.7.2 for more than four', () 
   }
 });
 
-test('selects special, rolling, and mobile A.4.7 methods without fabricating quarter positions', () => {
+test('selects special and rolling A.4.7 methods without fabricating quarter positions', () => {
   assert.equal(resultFor(baseProfile({ loadReceptorType: 'other / special configuration' }), 'A.4.7').method, 'A.4.7.3');
   assert.equal(resultFor(baseProfile({ rollingLoad: true }), 'A.4.7').method, 'A.4.7.4');
-  assert.equal(resultFor(baseProfile({ mobileInstrument: true }), 'A.4.7').method, 'A.4.7.5');
   assert.equal(resultFor(baseProfile({ loadReceptorType: undefined }), 'A.4.7').status, 'REQUIRES_CONFIGURATION');
   assert.equal(resultFor(baseProfile({ rollingLoad: undefined }), 'A.4.7').status, 'REQUIRES_CONFIGURATION');
+});
+
+test('applies the supported A.4.7.1 positions under mobile clause A.4.7.5 when the four-support platform geometry applies', () => {
+  const applicable = resultFor(baseProfile({ mobileInstrument: true }), 'A.4.7');
+  assert.equal(applicable.method, 'A.4.7.1');
+  assert.equal(applicable.methodLabel, 'Mobile instrument · applicable four-quarter platform positions');
+  assert.equal(applicable.executionSupported, true);
+  assert.match(applicable.reason, /A\.4\.7\.5 applies.*A\.4\.7\.1/);
+  assert.deepEqual(applicable.positions?.map(position => position.label), ['Quarter 1', 'Quarter 2', 'Quarter 3', 'Quarter 4']);
+});
+
+test('does not infer mobile quarter positions for special, rolling, or other support geometry', () => {
+  for (const overrides of [
+    { mobileInstrument: true, loadReceptorType: 'other / special configuration' as const },
+    { mobileInstrument: true, rollingLoad: true },
+    { mobileInstrument: true, numberOfSupportPoints: 6 },
+  ]) {
+    const result = resultFor(baseProfile(overrides), 'A.4.7');
+    assert.equal(result.method, 'A.4.7.5');
+    assert.equal(result.executionSupported, false);
+    assert.equal(result.positions, undefined);
+  }
 });
 
 test('selects the digital A.4.8.2 procedure only for d at least 5 mg', () => {
@@ -224,14 +246,23 @@ test('selects the digital A.4.8.2 procedure only for d at least 5 mg', () => {
   assert.equal(resultFor(baseProfile({ d: 0.005 }), 'A.4.8').status, 'APPLICABLE');
   assert.equal(resultFor(baseProfile({ d: 0.004 }), 'A.4.8').status, 'NOT_APPLICABLE');
   assert.equal(resultFor(baseProfile({ d: 0.006 }), 'A.4.8').status, 'APPLICABLE');
+  const semiDigital = resultFor(baseProfile({ indicationType: 'Semi-self-indicating', d: 0.01 }), 'A.4.8');
+  assert.equal(semiDigital.method, 'A.4.8.2');
+  assert.equal(semiDigital.status, 'APPLICABLE');
 });
 
 test('does not route unsupported indication configurations through A.4.8.2', () => {
   const analog = resultFor(baseProfile({ digitalIndication: false }), 'A.4.8');
   assert.equal(analog.status, 'APPLICABLE');
   assert.equal(analog.method, 'A.4.8.1');
-  assert.equal(analog.executionSupported, false);
+  assert.equal(analog.executionSupported, true);
+  assert.equal(analog.method, 'A.4.8.1');
   assert.equal(resultFor(baseProfile({ indicationType: undefined }), 'A.4.8').status, 'REQUIRES_CONFIGURATION');
+  const multiRange = resultFor(baseProfile({ digitalIndication: false, rangeType: 'multiple-range' }), 'A.4.8');
+  assert.equal(multiRange.status, 'UNSUPPORTED');
+  assert.equal(multiRange.executionSupported, false);
+  const multiInterval = resultFor(baseProfile({ digitalIndication: false, intervalType: 'multi-interval' }), 'A.4.8');
+  assert.equal(multiInterval.status, 'UNSUPPORTED');
 });
 
 test('selects the A.4.9 sensitivity procedure only for non-self-indicating instruments', () => {

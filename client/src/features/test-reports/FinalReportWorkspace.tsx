@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowLeft, Check, Download, LogOut, Send } from 'lucide-react';
 import axios from 'axios';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { downloadBlob } from '../../lib/downloadBlob';
+import { latestReportSubmission } from '../../lib/reportSubmission';
 import EvidencePanel from '../evidence/EvidencePanel';
 import './final-report.css';
 
@@ -34,12 +36,9 @@ export default function FinalReportWorkspace() {
   const downloadPdf = async () => {
     setBusy(true); setError('');
     try {
-      const response = await axios.get(`/test-reports/${reportId}/review/pdf`, { responseType: 'blob' });
-      const url = URL.createObjectURL(response.data);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `${data.report.testReportId}-draft-report.pdf`;
-      document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+      const kind = data?.report?.status === 'COMPLETED' ? 'final' : 'draft';
+      const response = await axios.get(`/test-reports/${reportId}/review/pdf?kind=${kind}`, { responseType: 'blob' });
+      downloadBlob(response.data, `${data.report.testReportId}-${kind}-report.pdf`);
       await load();
     } catch (e: any) {
       setError(e.response?.data?.message || 'Unable to generate the draft PDF.');
@@ -56,6 +55,14 @@ export default function FinalReportWorkspace() {
     } finally { setBusy(false); }
   };
 
+  const submitRetest = async () => {
+    if (!data?.retestRequest?.id) return;
+    setBusy(true); setError('');
+    try { await axios.post(`/test-reports/${reportId}/retests/${data.retestRequest.id}/submit`); await load(); setMessageNotice('Retest submitted for reviewer assessment.'); }
+    catch (e: any) { setError(e.response?.data?.message || 'Unable to submit the retest.'); }
+    finally { setBusy(false); }
+  };
+
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError(''); setMessageNotice('');
     try {
@@ -69,31 +76,37 @@ export default function FinalReportWorkspace() {
   if (!data) return <main className="verification-page"><div className="verification-loading">{error || 'Loading final testing review…'}</div></main>;
 
   const { report, performance, influenceFactors, endurance } = data;
+  const latestSubmission = latestReportSubmission(report);
   const prototype = Boolean(data.prototype);
   const submitted = ['AWAITING_REVIEW', 'UNDER_REVIEW'].includes(String(report.status));
   const finalized = report.stage === 'FINAL_REPORT' && report.status === 'COMPLETED';
+  const retestRequired = report.status === 'RETEST_REQUIRED' && Boolean(data.retestRequest);
+  const closed = submitted || finalized || ['REJECTED', 'CANCELLED'].includes(String(report.status));
   const unit = report.instrument?.unit || performance?.instrumentSnapshot?.unit || 'g';
   const routeTests = [...(data.applicability?.tests || [])].sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
   const records = { performance, influenceFactors, endurance, ...data };
   const pendingTests = data.pendingTests || [];
   const attentionTests = data.attentionTests || [];
-  const canSubmit = !submitted && !finalized && !data.readinessError && pendingTests.length === 0 && attentionTests.length === 0;
+  const retestReady = retestRequired && ['COMPLETED', 'PASS', 'FAIL'].includes(String(data.retestRequest?.currentTest?.status)) && ['PASS', 'FAIL'].includes(String(data.retestRequest?.currentTest?.result));
+  const canSubmit = !closed && !retestRequired && !data.readinessError && pendingTests.length === 0 && attentionTests.length === 0;
+  const canDownload = submitted || finalized;
   const overall = data.overallResult || 'INCOMPLETE';
   const overallClass = String(overall).toLowerCase();
 
   return <main className="verification-page">
-    <header className="workspace-top">
-      <Link to={submitted ? '/tester/dashboard' : `/tester/reports/${reportId}/testing`}><ArrowLeft size={16} /> {submitted ? 'Back to Dashboard' : 'Back to Testing'}</Link>
+      <header className="workspace-top">
+      <Link to={closed ? '/tester/dashboard' : `/tester/reports/${reportId}/testing`}><ArrowLeft size={16} /> {closed ? 'Back to Dashboard' : 'Back to Testing'}</Link>
       <div className="workspace-brand"><strong>NAWI</strong><span>TEST &amp; REPORT SYSTEM</span></div>
       <button className="report-logout" onClick={() => { axios.post('/auth/logout').finally(() => nav('/login')); }}><LogOut size={15} /> Sign out</button>
     </header>
 
     <section className="workspace-content report-review-content">
       <div className="workspace-heading report-review-heading">
-        <div><span className="technical-label">FINAL TESTING HANDOFF</span><h1>Final Testing Review</h1><p>Review the completed test record before submitting it to the reviewing authority.</p></div>
-        <span className={`workspace-status ${submitted || finalized ? 'complete' : 'active'}`}>{submitted ? 'Submitted for review' : finalized ? 'Finalized' : 'Draft review'}</span>
+        <div><span className="technical-label">{closed ? 'REPORT STATUS' : 'FINAL TESTING HANDOFF'}</span><h1>{closed ? 'Report status' : 'Final Testing Review'}</h1><p>{closed ? 'Read the persisted report record and its available document and communication actions.' : 'Review the completed test record before submitting it to the reviewing authority.'}</p></div>
+        <span className={`workspace-status ${closed ? 'complete' : 'active'}`}>{submitted ? 'Submitted for review' : finalized ? 'Approved / Completed' : report.status === 'REJECTED' ? 'Rejected' : 'Draft review'}</span>
       </div>
-      {prototype && <div className="report-prototype-banner"><strong>PROTOTYPE WORKFLOW</strong><span>This report contains synthetic/prototype test data and must not be treated as a genuine legal-metrology test report.</span></div>}
+      {prototype && <div className="report-prototype-banner"><strong>SYNTHETIC PROTOTYPE / REGRESSION DATA</strong><span>Test observations are synthetic. The displayed result remains calculated from the saved report data.</span></div>}
+      {retestRequired && <div className="report-retest-banner"><strong>RETEST REQUIRED · {data.retestRequest.testCode}</strong><span>{data.retestRequest.testName}: {data.retestRequest.reason}</span>{data.retestRequest.instructions && <small>{data.retestRequest.instructions}</small>}</div>}
       {error && <div className="report-error" role="alert">{error}</div>}
 
       <section className="review-summary-strip">
@@ -101,7 +114,7 @@ export default function FinalReportWorkspace() {
         <SummaryMetric label="Instrument" value={report.instrument?.typeDesignation} />
         <SummaryMetric label="Mathematical result" value={overall} />
         <SummaryMetric label="Workflow status" value={submitted ? 'AWAITING REVIEW' : report.status} />
-        {submitted && <SummaryMetric label="Submitted by / at" value={`${valueOrDash(report.testerNameSnapshot || report.laboratory?.testerName)} · ${dateTime(report.submittedForReviewAt)}`} />}
+        {submitted && <SummaryMetric label="Submitted by / at" value={`${valueOrDash(latestSubmission.actor)} · ${dateTime(latestSubmission.timestamp)}`} />}
       </section>
 
       <div className="review-document">
@@ -118,7 +131,7 @@ export default function FinalReportWorkspace() {
         <ReviewSection title="Test results" meta={`${routeTests.length} applicable route entries`}>
           <div className="review-overall-row">
             <section className={`review-overall review-overall-${overallClass}`}><div><span className="technical-label">OVERALL MATHEMATICAL RESULT</span><h2>{overall}</h2><p>Derived from the persisted test calculations. Prototype classification is shown separately.</p></div></section>
-            {prototype && <div className="review-classification"><small>Classification</small><strong>PROTOTYPE WORKFLOW</strong><span>Not legal-metrology evidence</span></div>}
+            {prototype && <div className="review-classification"><small>Classification</small><strong>SYNTHETIC PROTOTYPE</strong><span>Regression data</span></div>}
           </div>
           <div className="review-route-table" role="table" aria-label="Persisted test summary">
             <div className="review-route-header" role="row"><span>Clause</span><span>Test</span><span>Status</span><span>Result</span></div>
@@ -127,13 +140,17 @@ export default function FinalReportWorkspace() {
           </div>
         </ReviewSection>
 
-        <ReviewSection title="Validation before submission" meta={canSubmit ? 'Ready' : 'Action required'}>
-          {canSubmit ? <div className="review-validation-ok"><Check size={17} /> All applicable test and report prerequisites are ready for submission.</div> : <div className="review-validation-list">
+        <ReviewSection title="Validation before submission" meta={closed ? 'Read-only' : canSubmit ? 'Ready' : 'Action required'}>
+          {closed ? <div className="review-validation-ok"><Check size={17} /> This report is read-only after submission or reviewer closure.</div> : canSubmit ? <div className="review-validation-ok"><Check size={17} /> All applicable test and report prerequisites are ready for submission.</div> : <div className="review-validation-list">
             {data.readinessError && <p><strong>Test conditions:</strong> {data.readinessError}</p>}
             {pendingTests.length > 0 && <p><strong>Incomplete tests:</strong> {pendingTests.map((item: any) => `${item.code} ${item.name || ''}`).join(', ')}</p>}
             {attentionTests.length > 0 && <p><strong>Attention required:</strong> {attentionTests.map((item: any) => `${item.code} ${item.reason || item.name || 'review the test record'}`).join(', ')}</p>}
           </div>}
         </ReviewSection>
+
+        {report.status === 'REJECTED' && <ReviewSection title="Reviewer decision" meta="Read-only decision"><SummaryGrid items={[['Decision', 'Rejected'], ['Reviewer', report.reviewerNameSnapshot], ['Reviewed at', dateTime(report.reviewedAt)], ['Reason', report.reviewComment || 'No reason recorded']]} /></ReviewSection>}
+
+        {retestRequired && <ReviewSection title="Retest history" meta={`Attempt ${data.retestRequest.attemptNumber}`}><SummaryGrid items={[['Requested test', `${data.retestRequest.testCode} · ${data.retestRequest.testName}`], ['Reviewer', data.retestRequest.reviewerNameSnapshot], ['Requested at', dateTime(data.retestRequest.requestedAt)], ['Previous attempt', data.retestRequest.previousAttempt?.result || data.retestRequest.previousAttempt?.status || 'Preserved'], ['Current attempt', data.retestRequest.currentTest?.result || data.retestRequest.currentTest?.status || 'Ready for tester']]} /><p className="report-prototype-copy">Only the requested test is reopened. The previous submitted attempt remains preserved.</p></ReviewSection>}
 
         {endurance && <ReviewSection title="A.6 endurance summary" meta={prototype ? 'Prototype workflow' : endurance.status}>
           <div className="review-fields">
@@ -145,7 +162,7 @@ export default function FinalReportWorkspace() {
             <SummaryMetric label="Abnormal events" value={(endurance.events || []).filter((item: any) => String(item.action || '').toLowerCase().includes('abnormal')).length} />
             <SummaryMetric label="Recovery checkpoints" value={(endurance.checkpoints || []).length} />
           </div>
-          {prototype && <p className="report-prototype-copy">Synthetic endurance counts and prototype navigation remain visibly classified as non-legal evidence.</p>}
+          {prototype && <p className="report-prototype-copy">Synthetic endurance counts remain clearly classified as prototype regression data.</p>}
         </ReviewSection>}
 
         <ReviewSection title="Complete results" meta="Persisted observations and calculations">
@@ -153,7 +170,7 @@ export default function FinalReportWorkspace() {
         </ReviewSection>
 
         <ReviewSection title="Additional evidence" meta="Optional report-level support">
-          <EvidencePanel context={{ reportId, category: 'REPORT', evidenceType: 'report_additional', label: 'Additional report evidence', title: 'Additional report evidence', testName: 'Final Testing Review', oimlReference: 'Report' }} />
+          <EvidencePanel readOnly={closed || retestRequired} context={{ reportId, category: 'REPORT', evidenceType: 'report_additional', label: 'Additional report evidence', title: 'Additional report evidence', testName: 'Final Testing Review', oimlReference: 'Report' }} />
         </ReviewSection>
 
         <ReviewSection title="Authority communication" meta="Report-scoped message thread">
@@ -164,21 +181,24 @@ export default function FinalReportWorkspace() {
       </div>
 
       <section className="handoff-actions" aria-label="Final report actions">
-        <div><span className="technical-label">SUBMISSION</span><h2>{submitted ? 'Submitted for review' : 'Final actions'}</h2><p>{submitted ? `Submitted ${dateTime(report.submittedForReviewAt)} by ${valueOrDash(report.testerNameSnapshot || report.laboratory?.testerName)}.` : data.readinessError || (pendingTests.length ? `${pendingTests.length} applicable test(s) remain before submission.` : 'Download the draft, then submit the persisted report when ready.')}</p></div>
+        <div><span className="technical-label">REPORT ACTIONS</span><h2>{retestRequired ? 'Retest required' : submitted ? 'Awaiting reviewer assessment' : finalized ? 'Approved / Completed' : report.status === 'REJECTED' ? 'Rejected' : 'Final actions'}</h2><p>{retestRequired ? `Complete ${data.retestRequest.testCode} and submit only that retest. The previous attempt remains in history.` : submitted ? `Submitted ${dateTime(report.submittedForReviewAt)} by ${valueOrDash(report.testerNameSnapshot || report.laboratory?.testerName)}.` : finalized ? `Approved ${dateTime(report.reviewedAt)} by ${valueOrDash(report.reviewerNameSnapshot)}.` : report.status === 'REJECTED' ? `Rejected ${dateTime(report.reviewedAt)} by ${valueOrDash(report.reviewerNameSnapshot)}.` : data.readinessError || (pendingTests.length ? `${pendingTests.length} applicable test(s) remain before submission.` : 'Download the draft, then submit the persisted report when ready.')}</p></div>
         <div className="handoff-action-buttons">
-          <button className="report-primary" onClick={() => setConfirmSubmit(true)} disabled={busy || submitted || finalized}><Send size={16} /> Submit for Review</button>
-          <button className="report-secondary" onClick={() => void downloadPdf()} disabled={busy}><Download size={16} /> {busy ? 'Preparing…' : 'Download Draft PDF'}</button>
+          {retestRequired && <button className="report-primary" onClick={() => nav(retestRoute(reportId, data.retestRequest.testCode))}><Send size={16} /> Review Retest Request</button>}
+          {retestRequired && retestReady && <button className="report-secondary" onClick={() => void submitRetest()} disabled={busy}><Send size={16} /> Submit Retest</button>}
+          {!closed && !retestRequired && <button className="report-primary" onClick={() => setConfirmSubmit(true)} disabled={busy}><Send size={16} /> Submit for Review</button>}
+          {canDownload && <button className="report-secondary pdf-download-action" onClick={() => void downloadPdf()} disabled={busy}><Download size={16} /> {busy ? 'Preparing…' : finalized ? 'Download Final PDF' : 'Download Draft PDF'}</button>}
           <button className="report-tertiary" onClick={() => nav('/tester/dashboard')}><ArrowLeft size={16} /> Go to Dashboard</button>
         </div>
       </section>
 
-      {confirmSubmit && <div className="report-confirm-backdrop" role="presentation"><div className="report-confirm" role="dialog" aria-modal="true" aria-labelledby="submit-report-title"><span className="technical-label">SUBMIT REPORT FOR REVIEW</span><h2 id="submit-report-title">Send this report to the reviewing authority?</h2>{prototype && <p className="report-prototype-copy">This is a PROTOTYPE workflow. Submission does not make synthetic endurance data legally valid.</p>}{!canSubmit && <p className="report-validation-copy">The server will not accept submission yet: {data.readinessError || (pendingTests.length ? `${pendingTests.length} applicable test(s) remain.` : 'a report prerequisite requires attention.')}</p>}<p>The backend remains authoritative and will confirm or reject the transition.</p><div><button className="report-secondary" onClick={() => setConfirmSubmit(false)}>Cancel</button><button className="report-primary" onClick={() => void submitForReview()} disabled={busy}>Submit for Review <Send size={16} /></button></div></div></div>}
+      {confirmSubmit && <div className="report-confirm-backdrop" role="presentation"><div className="report-confirm" role="dialog" aria-modal="true" aria-labelledby="submit-report-title"><span className="technical-label">SUBMIT REPORT FOR REVIEW</span><h2 id="submit-report-title">Send this report to the reviewing authority?</h2>{prototype && <p className="report-prototype-copy">This report is classified as synthetic prototype / regression data. Its result is based on the persisted test calculations.</p>}{!canSubmit && <p className="report-validation-copy">The server will not accept submission yet: {data.readinessError || (pendingTests.length ? `${pendingTests.length} applicable test(s) remain.` : 'a report prerequisite requires attention.')}</p>}<p>The backend remains authoritative and will confirm or reject the transition.</p><div><button className="report-secondary" onClick={() => setConfirmSubmit(false)}>Cancel</button><button className="report-primary" onClick={() => void submitForReview()} disabled={busy}>Submit for Review <Send size={16} /></button></div></div></div>}
     </section>
   </main>;
 }
 
 function SummaryMetric({ label, value }: { label: string; value: unknown }) { return <div className="review-summary-metric"><small>{label}</small><strong>{valueOrDash(value)}</strong></div>; }
+function retestRoute(reportId: string, code: string) { const routes: Record<string, string> = { 'A.4.2': 'a4-2', 'A.4.3': 'a4-3', 'A.4.4': 'a4-4', 'A.4.5': 'a4-5', 'A.4.6': 'a4-6', 'A.4.7': 'a4-7', 'A.4.8': 'a4-8', 'A.4.9': 'a4-9', 'A.4.10': 'a4-10', 'A.4.11': 'a4-11', 'A.4.12': 'a4-12' }; if (code === 'A.5') return `/tester/reports/${reportId}/influence-factors`; if (code === 'A.6') return `/tester/reports/${reportId}/endurance`; return `/tester/reports/${reportId}/testing/${routes[code] || ''}`; }
 function ReviewSection({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) { return <section className="review-section"><div className="review-section-heading"><h2>{title}</h2><span>{valueOrDash(meta)}</span></div>{children}</section>; }
 function SummaryGrid({ items }: { items: Array<[string, unknown]> }) { return <div className="review-fields">{items.map(([label, value]) => <div className="review-field" key={label}><small>{label}</small><strong>{valueOrDash(value)}</strong></div>)}</div>; }
 function friendlyName(test: any) { const names: Record<string, string> = { 'A.4.2': 'Checking of Zero', 'A.4.3': 'Setting to Zero Before Loading', 'A.4.4': 'Weighing Performance', 'A.4.5': 'Multiple Indicating Devices', 'A.4.6': 'Tare', 'A.4.7': 'Eccentricity', 'A.4.8': 'Discrimination', 'A.4.9': 'Sensitivity', 'A.4.10': 'Repeatability', 'A.4.11': 'Variation of Indication with Time', 'A.4.12': 'Stability of Equilibrium', 'A.5': 'Influence Factors', 'A.6': 'Endurance' }; return names[test.code] || test.name || test.code; }
-function routeState(test: any, records: any, prototype: boolean) { if (test.code === 'A.6' && prototype) return { label: 'PROTOTYPE', result: records.endurance?.durabilityAssessment?.result || 'INCOMPLETE', className: 'progress' }; const recordMap: Record<string, any> = { 'A.4.2': records.zeroChecking, 'A.4.3': records.zeroSettingBeforeLoading, 'A.4.4': records.performance, 'A.4.5': records.multipleIndicating, 'A.4.6': records.tare, 'A.4.7': records.eccentricity, 'A.4.8': records.discrimination, 'A.4.9': records.sensitivity, 'A.4.10': records.repeatability?.test || records.repeatability, 'A.4.11': records.variationWithTime, 'A.4.12': records.stabilityOfEquilibrium, 'A.5': records.influenceFactors, 'A.6': records.endurance }; const record = recordMap[test.code]; if (record?.status === 'COMPLETED' || (test.code === 'A.4.5' && ['PASS', 'FAIL'].includes(record?.status))) return { label: 'COMPLETED', result: record.result || record.status || '—', className: 'completed' }; if (record?.status === 'IN_PROGRESS') return { label: 'IN PROGRESS', result: '—', className: 'progress' }; if (test.status === 'NOT_APPLICABLE') return { label: 'NOT APPLICABLE', result: '—', className: 'muted' }; return { label: 'INCOMPLETE', result: '—', className: 'pending' }; }
+function routeState(test: any, records: any, prototype: boolean) { if (test.status === 'NOT_APPLICABLE') return { label: 'NOT APPLICABLE', result: '—', className: 'muted' }; if (test.code === 'A.6' && prototype) { const record = records.endurance; const result = record?.durabilityAssessment?.result || record?.result || 'INCOMPLETE'; const completed = record?.status === 'COMPLETED'; return { label: completed ? 'COMPLETED' : String(record?.status || 'INCOMPLETE').replace(/_/g, ' '), result, className: result === 'PASS' ? 'completed' : result === 'FAIL' ? 'attention' : 'progress' }; } const recordMap: Record<string, any> = { 'A.4.2': records.zeroChecking, 'A.4.3': records.zeroSettingBeforeLoading, 'A.4.4': records.performance, 'A.4.5': records.multipleIndicating, 'A.4.6': records.tare, 'A.4.7': records.eccentricity, 'A.4.8': records.discrimination, 'A.4.9': records.sensitivity, 'A.4.10': records.repeatability?.test || records.repeatability, 'A.4.11': records.variationWithTime, 'A.4.12': records.stabilityOfEquilibrium, 'A.5': records.influenceFactors, 'A.6': records.endurance }; const record = recordMap[test.code]; if (record?.status === 'COMPLETED' || (test.code === 'A.4.5' && ['PASS', 'FAIL'].includes(record?.status))) return { label: 'COMPLETED', result: record.result || record.status || '—', className: 'completed' }; if (record?.status === 'IN_PROGRESS') return { label: 'IN PROGRESS', result: '—', className: 'progress' }; return { label: 'INCOMPLETE', result: '—', className: 'pending' }; }

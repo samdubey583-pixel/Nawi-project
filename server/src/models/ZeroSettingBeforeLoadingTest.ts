@@ -17,6 +17,8 @@ const zeroSettingBeforeLoadingSchema = new Schema({
   zeroDeviation: Number,
   zeroDeviationUnit: String,
   sourceEvidence: { type: Schema.Types.Mixed },
+  procedureObservations: { type: Schema.Types.Mixed },
+  executionMode: { type: String, enum: ['PHYSICAL', 'SYNTHETIC_SIMULATION'], default: 'PHYSICAL' },
   operatorNotes: { type: String, default: '' },
   revalidationHistory: { type: [Schema.Types.Mixed], default: [] },
   startedAt: Date,
@@ -25,4 +27,3 @@ const zeroSettingBeforeLoadingSchema = new Schema({
 }, { timestamps: true, collection: 'zeroSettingBeforeLoadingTests' });
 
 export const ZeroSettingBeforeLoadingTest = mongoose.model('ZeroSettingBeforeLoadingTest', zeroSettingBeforeLoadingSchema);
-

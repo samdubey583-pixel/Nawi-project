@@ -1,0 +1,13 @@
+.influence-recalculate-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 15px;
+  padding: 14px 16px;
+  border: 1px solid #d8cbb9;
+  background: #faf5eb;
+}
+.influence-recalculate-note p { margin: 0; color: #655d55; font-size: 13px; line-height: 1.5; }
+.influence-recalculate-note .influence-primary { flex: none; }
+@media (max-width: 680px) { .influence-recalculate-note { align-items: stretch; flex-direction: column; } }

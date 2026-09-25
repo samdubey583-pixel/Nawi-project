@@ -9,6 +9,14 @@ export const STABILITY_REPETITIONS = 5;
 const precision = (value: number) => Number(value.toFixed(12));
 const equal = (a: number, b: number) => Math.abs(a - b) <= 1e-9;
 
+/** A.4.12 records automatic zero-setting as OFF during both zero and tare repetitions. */
+export function stabilityLoadL0(snapshot: { e?: unknown; zeroSettingMethod?: unknown; zeroTracking?: unknown }, zeroTrackingOffConfirmed: boolean) {
+  if (zeroTrackingOffConfirmed) return 0;
+  const e = Number(snapshot.e);
+  const automatic = String(snapshot.zeroSettingMethod || '').toLowerCase() === 'automatic' || snapshot.zeroTracking === true;
+  return Number.isFinite(e) && e > 0 && automatic ? 10 * e : 0;
+}
+
 export type StabilityOperation = 'PRINT' | 'STORE' | 'ZERO' | 'TARE';
 export type StabilityResult = 'PASS' | 'FAIL' | 'INCOMPLETE';
 

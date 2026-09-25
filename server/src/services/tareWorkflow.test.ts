@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { activateNextApplicableTarePhase, deriveTareReadiness, normalizeTareConfiguration, tareConfigurationsMatch, tareSettingExecutionHasBegun } from './tareWorkflow.js';
+import { completeTareSettingPhase } from './tareObservationWorkflow.js';
 
 const routeTests = [
   { code: 'A.4.2', name: 'Checking of Zero', order: 1, status: 'APPLICABLE' },
@@ -79,4 +80,23 @@ test('promotes a locked successor phase after the completed phase', () => {
   ];
   assert.equal(activateNextApplicableTarePhase(phases, 1), 'A.4.6.3');
   assert.equal(phases[2].status, 'AVAILABLE');
+});
+
+test('completes tare-setting only after the required passing repetitions are already persisted', () => {
+  const phase: any = { status: 'IN_PROGRESS', observations: Array.from({ length: 5 }, (_, index) => ({ sequence: index + 1, tareLoad: 9, loadL0: 0, indicationI0: 0, deltaL: 0.005, errorE0: 0, result: 'PASS' })), calculations: { result: 'PASS' } };
+  const completedAt = new Date('2026-09-23T00:00:00.000Z');
+  const result = completeTareSettingPhase(phase, 5, completedAt);
+  assert.equal(result.completed, true);
+  assert.equal(phase.status, 'COMPLETED');
+  assert.equal(phase.result, 'PASS');
+  assert.equal(phase.completedAt, completedAt);
+  assert.equal(phase.calculations.completion.validRepetitions, 5);
+});
+
+test('does not complete tare-setting when required repetitions are missing', () => {
+  const phase: any = { status: 'IN_PROGRESS', observations: [{ tareLoad: 9, loadL0: 0, indicationI0: 0, deltaL: 0.005, errorE0: 0, result: 'PASS' }] };
+  const result = completeTareSettingPhase(phase, 5);
+  assert.equal(result.completed, false);
+  assert.equal(phase.status, 'IN_PROGRESS');
+  assert.equal(phase.completedAt, undefined);
 });

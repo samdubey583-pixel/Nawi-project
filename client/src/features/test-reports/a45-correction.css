@@ -1,0 +1,22 @@
+.a45-correction {
+  margin-top: 22px;
+  padding: 22px;
+  border: 1px solid #d8cbb9;
+  background: #faf5eb;
+}
+.a45-correction h3 { margin: 7px 0 8px; font: 700 20px/1.25 Manrope, sans-serif; color: #0b0a09; }
+.a45-correction > p { margin: 0; color: #655d55; font-size: 14px; line-height: 1.55; }
+.a45-correction-reason { display: grid; gap: 7px; margin-top: 16px; color: #4b2918; font-size: 13px; font-weight: 700; }
+.a45-correction-reason textarea { min-height: 76px; padding: 10px 12px; border: 1px solid #c9b99f; border-radius: 7px; background: #fffdf8; color: #0b0a09; font: 500 14px Inter, sans-serif; resize: vertical; }
+.a45-correction-list { display: grid; gap: 9px; margin-top: 14px; }
+.a45-correction-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, 220px) auto; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid #dfd3c2; background: #fffdf8; }
+.a45-correction-row > div strong, .a45-correction-row > div small { display: block; }
+.a45-correction-row > div small { margin-top: 4px; color: #655d55; font-size: 12px; }
+.a45-correction-row label { display: grid; gap: 5px; color: #655d55; font-size: 12px; font-weight: 600; }
+.a45-correction-row input { width: 100%; min-height: 40px; box-sizing: border-box; padding: 8px 10px; border: 1px solid #c9b99f; border-radius: 6px; background: #fff; color: #0b0a09; font: 500 14px Inter, sans-serif; }
+.a45-correction-row input:focus, .a45-correction-reason textarea:focus { outline: 0; border-color: #4b2918; box-shadow: 0 0 0 3px rgba(75,41,24,.1); }
+@media (max-width: 620px) {
+  .a45-correction { padding: 16px; }
+  .a45-correction-row { grid-template-columns: 1fr; gap: 9px; }
+  .a45-correction-row .multiple-indicating-secondary { justify-content: center; }
+}
