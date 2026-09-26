@@ -10,14 +10,12 @@ test('Vercel build settings remain controlled by the client-root project configu
   assert.equal('outputDirectory' in config, false);
 });
 
-test('Vercel proxies API paths to the configurable Render origin with /api preserved', () => {
-  const apiRoute = config.routes[0];
-  assert.equal(apiRoute.src, '/api/(.*)');
-  assert.equal(apiRoute.dest, '${RENDER_API_ORIGIN}/api/$1');
-  assert.deepEqual(apiRoute.env, ['RENDER_API_ORIGIN']);
+test('Vercel externally rewrites API paths to the production Render API with /api preserved', () => {
+  const apiRewrite = config.rewrites[0];
+  assert.equal(apiRewrite.source, '/api/:path*');
+  assert.equal(apiRewrite.destination, 'https://nawi-project.onrender.com/api/:path*');
 });
 
 test('Vercel serves emitted assets before falling back unmatched client routes to index.html', () => {
-  assert.deepEqual(config.routes[1], { handle: 'filesystem' });
-  assert.deepEqual(config.routes[2], { src: '/(.*)', dest: '/index.html' });
+  assert.deepEqual(config.rewrites[1], { source: '/(.*)', destination: '/index.html' });
 });
