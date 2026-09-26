@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm ci --prefix client",
+  "buildCommand": "npm run build --prefix client",
+  "outputDirectory": "client/dist",
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "${RENDER_API_ORIGIN}/api/$1",
+      "env": ["RENDER_API_ORIGIN"]
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}
