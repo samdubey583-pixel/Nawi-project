@@ -8,12 +8,13 @@ import { Evidence } from '../models/Evidence.js';
 import { MobileEvidenceSession } from '../models/MobileEvidenceSession.js';
 import { findEvidenceDefinition } from '../services/evidenceDefinitions.js';
 import { canReadEvidenceFile, hasTesterReportAccess, testerEvidenceIsLocked } from '../services/reportAccess.js';
-import { buildEvidenceCaptureUrl, createEvidenceToken, hashEvidenceToken, resolveEvidenceCaptureBaseUrl, sessionAcceptsUpload } from '../services/evidenceSession.js';
+import { buildEvidenceCaptureUrl, createEvidenceToken, evidenceSessionTtlMs, hashEvidenceToken, resolveEvidenceCaptureBaseUrl, sessionAcceptsUpload } from '../services/evidenceSession.js';
+import { reviewerCanSelectTester, reviewerTesterIds } from '../services/reviewerWorkspaceScope.js';
+import { MAX_EVIDENCE_BYTES } from '../services/evidenceUpload.js';
 
 const r = Router();
-const MAX_BYTES = 5 * 1024 * 1024;
 const allowedMime = ['image/jpeg', 'image/png', 'image/webp'] as const;
-const sessionTtlMs = Math.max(60, Number(process.env.EVIDENCE_SESSION_TTL_SECONDS || 180)) * 1000;
+const sessionTtlMs = evidenceSessionTtlMs();
 
 const userName = (user: any) => `${user.firstName} ${user.lastName}`.trim();
 const isObjectId = (value: string) => mongoose.isValidObjectId(value);
@@ -53,7 +54,7 @@ function decodeImage(body: any) {
   const encoded = dataUrl?.[2] || raw;
   if (!(allowedMime as readonly string[]).includes(mimeType)) throw Object.assign(new Error('Only JPEG, PNG, or WebP photos are supported.'), { status: 400 });
   const data = Buffer.from(encoded, 'base64');
-  if (!data.length || data.length > MAX_BYTES) throw Object.assign(new Error('Photo must be smaller than 5 MB.'), { status: 400 });
+  if (!data.length || data.length > MAX_EVIDENCE_BYTES) throw Object.assign(new Error('Photo must be smaller than 3 MB.'), { status: 400 });
   return { mimeType, data };
 }
 
@@ -172,6 +173,11 @@ r.get('/evidence/:evidenceId/file', requireAuth, async (req: any, res, next) => 
     const report: any = await TestReport.findById(evidence.reportId).select('status submittedBy testerId');
     if (!report) return res.status(404).end();
     if (!canReadEvidenceFile(report, req.user.role, req.user._id)) return res.status(404).end();
+    if (['REVIEWER', 'ADMIN'].includes(String(req.user.role))) {
+      const testerIds = await reviewerTesterIds(req.user);
+      const owners = [report.testerId, report.submittedBy].filter(Boolean);
+      if (!owners.some(ownerId => reviewerCanSelectTester(testerIds, String(ownerId)))) return res.status(404).end();
+    }
     if (!evidence.data) return res.status(404).end();
     res.setHeader('Content-Type', evidence.mimeType); res.setHeader('Cache-Control', 'private, max-age=300'); res.send(evidence.data);
   } catch (e) { next(e); }

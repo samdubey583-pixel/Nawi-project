@@ -56,12 +56,19 @@ export default function TestRouteWorkspace() {
   // Keep the completion denominator limited to executable/configuration states.
   // NOT_APPLICABLE clauses are still rendered below so the route never silently
   // skips an evaluated R76 clause.
-  const a4Tests = useMemo(() => tests.filter(test => routeOf(test) === 'A.4' && (test.status === 'APPLICABLE' || CONFIGURABLE.includes(test.status))).sort((a, b) => a.order - b.order), [tests]);
+  const a4Tests = useMemo(() => tests.filter(test => routeOf(test) === 'A.4' && test.status === 'APPLICABLE' && test.executionSupported !== false).sort((a, b) => a.order - b.order), [tests]);
   const a4DisplayTests = useMemo(() => tests.filter(test => routeOf(test) === 'A.4' && (test.status === 'APPLICABLE' || CONFIGURABLE.includes(test.status) || test.status === 'NOT_APPLICABLE')).sort((a, b) => a.order - b.order), [tests]);
   const a5 = tests.find(test => routeOf(test) === 'A.5');
-  const a4Complete = a4Tests.length > 0
-    && a4Tests.every(test => availability[test.code]?.state === 'COMPLETED')
-    && (a5?.status === 'NOT_APPLICABLE' || ['READY', 'IN_PROGRESS', 'COMPLETED'].includes(availability['A.5']?.state || ''));
+  const a4ExecutableComplete = a4Tests.length > 0
+    && a4Tests.every(test => availability[test.code]?.state === 'COMPLETED');
+  // A.5's configuration screen is how the tester resolves a configuration
+  // requirement. Don't make its own CONFIGURATION_REQUIRED state hide the link
+  // once executable A.4 work is done. The server still gates starting A.5 until
+  // any real A.4 dependencies are satisfied, and submission readiness remains
+  // responsible for unresolved unsupported/configuration items.
+  const a5Availability = availability['A.5']?.state || '';
+  const canOpenA5 = a5?.status === 'NOT_APPLICABLE'
+    || ['READY', 'IN_PROGRESS', 'COMPLETED', 'CONFIGURATION_REQUIRED'].includes(a5Availability);
   const implemented = (test: RouteTest) => ['A.4.2', 'A.4.3', 'A.4.4', 'A.4.5', 'A.4.6', 'A.4.7', 'A.4.8', 'A.4.9', 'A.4.10', 'A.4.11', 'A.4.12', 'A.5'].includes(test.code) && test.executionSupported !== false;
   const workspacePath = (test: RouteTest) => test.code === 'A.4.2' ? `/tester/reports/${reportId}/testing/a4-2` : test.code === 'A.4.3' ? `/tester/reports/${reportId}/testing/a4-3` : test.code === 'A.4.5' ? `/tester/reports/${reportId}/testing/a4-5` : test.code === 'A.4.6' ? `/tester/reports/${reportId}/testing/a4-6` : test.code === 'A.4.7' ? `/tester/reports/${reportId}/testing/a4-7` : test.code === 'A.4.8' ? `/tester/reports/${reportId}/testing/a4-8` : test.code === 'A.4.9' ? `/tester/reports/${reportId}/testing/a4-9` : test.code === 'A.4.10' ? `/tester/reports/${reportId}/testing/a4-10` : test.code === 'A.4.11' ? `/tester/reports/${reportId}/testing/a4-11` : test.code === 'A.4.12' ? `/tester/reports/${reportId}/testing/a4-12` : test.code === 'A.5' ? `/tester/reports/${reportId}/influence-factors` : `/tester/reports/${reportId}/testing/a4-4`;
 
@@ -71,11 +78,11 @@ export default function TestRouteWorkspace() {
     <section className="test-route-content">
       <div className="test-route-heading"><div><span className="technical-label">ROUTE 1 OF 3 · A.4</span><h1>A.4 Performance Tests</h1><p>{report.testReportId} · Complete applicable tests; only tests with real source-data dependencies remain gated.</p></div><span className="test-route-badge">{a4Tests.length} required tests</span></div>
       <nav className="test-route-path" aria-label="Test routes"><strong>A.4 Performance Tests</strong><span>→</span><span>A.5 Influence Factors</span><span>→</span><span>A.6 Endurance</span></nav>
-      <section className="test-route-intro"><div className="test-route-intro-mark"><Play size={20} /></div><div><span className="technical-label">TEST PLAN</span><h2>Applicable performance sequence</h2><p>Applicability, order, reasons, and references come from the backend rule set. Influence Factors is a separate route and becomes available only after this route is complete.</p></div></section>
+      <section className="test-route-intro"><div className="test-route-intro-mark"><Play size={20} /></div><div><span className="technical-label">TEST PLAN</span><h2>Applicable performance sequence</h2><p>Execution-complete PASS and FAIL results both count as performed. Configuration, unsupported procedures, and revalidation remain visible and still need resolution before final submission.</p></div></section>
       {error && <div className="test-route-error">{error}</div>}
       <section className="test-route-list" aria-label="A.4 performance test route">{a4DisplayTests.map((test, index) => <RouteItem key={test.code} test={test} index={index} routeNumber={test.status === 'NOT_APPLICABLE' ? undefined : a4Tests.findIndex(item => item.code === test.code) + 1} availability={availability[test.code]} implemented={implemented(test)} onOpen={() => implemented(test) ? nav(workspacePath(test)) : setComingSoon(test)} />)}</section>
       {!a4Tests.length && <div className="test-route-empty">No A.4 performance test is currently available for this instrument profile. Review the persisted configuration before continuing.</div>}
-      {a4Complete ? <div className="test-route-next-step"><Check size={17} /><div><strong>A.4 Performance Tests complete</strong><span>The next route is Influence Factors.</span></div>{a5?.status === 'NOT_APPLICABLE' ? <span className="route-locked">Influence Factors not applicable</span> : <Link className="route-primary" to={`/tester/reports/${reportId}/influence-factors`}>Continue to Influence Factors →</Link>}</div> : a4Tests.length > 0 && <div className="test-route-next-step pending"><Lock size={17} /><div><strong>Influence Factors is locked</strong><span>Complete all required A.4 performance tests before opening Route 2.</span></div></div>}
+      {a4ExecutableComplete ? <div className="test-route-next-step"><Check size={17} /><div><strong>A.4 executable tests complete</strong><span>{a5Availability === 'CONFIGURATION_REQUIRED' ? 'Review the Influence Factors configuration to continue. Final submission remains blocked until all required configuration and support issues are resolved.' : 'The next route is Influence Factors. Any unresolved configuration or unsupported procedure will still block final submission.'}</span></div>{a5?.status === 'NOT_APPLICABLE' ? <span className="route-locked">Influence Factors not applicable</span> : canOpenA5 ? <Link className="route-primary" to={`/tester/reports/${reportId}/influence-factors`}>{a5Availability === 'CONFIGURATION_REQUIRED' ? 'Review Influence Factors setup →' : 'Continue to Influence Factors →'}</Link> : <span className="route-locked"><Lock size={14} /> {availability['A.5']?.reason || availability['A.5']?.dependencies?.[0]?.reason || 'Waiting for required A.4 test results.'}</span>}</div> : a4Tests.length > 0 && <div className="test-route-next-step pending"><Lock size={17} /><div><strong>Influence Factors is locked</strong><span>Complete all applicable executable A.4 tests before opening Route 2.</span></div></div>}
       {(deferred.length > 0 || tests.some(test => routeOf(test) === 'A.4' && !a4Tests.includes(test) && test.status !== 'NOT_APPLICABLE')) && <details className="test-route-not-included"><summary>Configuration notes</summary><div>{tests.filter(test => routeOf(test) === 'A.4' && !a4Tests.includes(test) && test.status !== 'NOT_APPLICABLE').map(test => <p key={test.code}><strong>{test.code} · {friendlyName(test)}</strong><span>{test.status.replace(/_/g, ' ')} · {test.reason}</span></p>)}{deferred.map(test => <p key={test.code}><strong>{test.code} · {test.name}</strong><span>{test.status} · {test.reason}</span></p>)}</div></details>}
     </section>
     {comingSoon && <div className="test-route-modal-backdrop" role="presentation" onClick={() => setComingSoon(undefined)}><section className="test-route-modal" role="dialog" aria-modal="true" aria-labelledby="coming-soon-title" onClick={event => event.stopPropagation()}><button className="modal-close" aria-label="Close" onClick={() => setComingSoon(undefined)}><X size={18} /></button><span className="technical-label">{comingSoon.code}</span><h2 id="coming-soon-title">Test Coming Soon</h2><p>This OIML procedure is included in the applicable performance route, but its digital execution module is not yet available.</p><button className="route-primary" onClick={() => setComingSoon(undefined)}>Close</button></section></div>}
@@ -86,7 +93,7 @@ function RouteItem({ test, index, routeNumber, availability, implemented, onOpen
   const notApplicable = test.status === 'NOT_APPLICABLE';
   const completed = availability?.state === 'COMPLETED';
   const inProgress = availability?.state === 'IN_PROGRESS';
-  const available = availability?.state === 'READY' || inProgress;
+  const available = availability?.state === 'READY' || availability?.state === 'CONFIGURATION_REQUIRED' || inProgress;
   const locked = !completed && !notApplicable && !available;
   const config = available && CONFIGURABLE.includes(test.status);
   const derived = test.code === 'A.4.5';

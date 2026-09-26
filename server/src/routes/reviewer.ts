@@ -32,6 +32,7 @@ import { buildReviewerTesterDirectory } from '../services/reviewerDirectory.js';
 import { buildReviewerInstrumentRepository } from '../services/reviewerInstruments.js';
 import { reviewRecord } from '../services/reviewerRecord.js';
 import { parseReviewerNotificationId } from '../services/reviewerNotificationRead.js';
+import { reviewerCanSelectTester, reviewerReportOwnerFilter, reviewerTesterIds } from '../services/reviewerWorkspaceScope.js';
 
 const r = Router();
 r.use(requireAuth, requireRole('REVIEWER', 'ADMIN'));
@@ -51,7 +52,11 @@ const artifactSpecs = [
   ['A.5', 'Influence Factors', InfluenceFactorsTest], ['A.6', 'Endurance', EnduranceTest],
 ] as const;
 
-async function findReport(id: string) { return TestReport.findOne(reportQuery(id)); }
+function andFilters(...filters: any[]) { return { $and: filters }; }
+async function findReport(id: string, user: any) {
+  const testerIds = await reviewerTesterIds(user);
+  return TestReport.findOne(andFilters(reportQuery(id), reviewerReportOwnerFilter(testerIds)));
+}
 async function loadArtifacts(reportId: unknown) {
   const entries = await Promise.all(artifactSpecs.map(async ([code, name, model]) => [code, { code, name, record: await (model as any).findOne({ reportId }).lean() }] as const));
   return Object.fromEntries(entries) as Record<string, { code: string; name: string; record: any }>;
@@ -87,14 +92,16 @@ r.get('/reports', async (req: any, res, next) => {
   try {
     const statuses = ['AWAITING_REVIEW', 'UNDER_REVIEW', 'RETEST_REQUIRED', 'COMPLETED', 'REJECTED'];
     const testerId = String(req.query.testerId || '').trim();
-    const reportFilter: any = { status: { $in: statuses } };
+    const allowedTesterIds = await reviewerTesterIds(req.user);
+    const reportOwnerFilter = reviewerReportOwnerFilter(allowedTesterIds, testerId || undefined);
+    const reportFilter: any = andFilters({ status: { $in: statuses } }, reportOwnerFilter);
     if (!testerId) reportFilter._id = { $exists: false };
     else if (!mongoose.isValidObjectId(testerId)) return res.status(400).json({ message: 'Select a valid tester before loading reviewer records.' });
-    else reportFilter.$or = [{ testerId }, { submittedBy: testerId }];
+    else if (!reviewerCanSelectTester(allowedTesterIds, testerId)) return res.status(404).json({ message: 'Tester not found in this reviewer workspace.' });
     const reports: any[] = await TestReport.find(reportFilter).sort({ status: 1, updatedAt: -1 }).lean();
     const items = await Promise.all(reports.map(async report => listItem(report, await buildReviewState(report))));
     const counts = dashboardCounts(reports as any);
-    const messageReports: any[] = reports.length ? reports : await TestReport.find({ status: { $in: statuses } }).select('testReportId status').lean();
+    const messageReports: any[] = reports.length ? reports : await TestReport.find(andFilters({ status: { $in: statuses } }, reviewerReportOwnerFilter(allowedTesterIds))).select('testReportId status').lean();
     const messages: any[] = messageReports.length ? await ReportMessage.find({ reportId: { $in: messageReports.map(report => report._id) } }).sort({ createdAt: -1 }).limit(10).lean() : [];
     const reportById = new Map(messageReports.map(report => [String(report._id), report]));
     const messagePreview = messages.map(message => ({
@@ -106,9 +113,10 @@ r.get('/reports', async (req: any, res, next) => {
   } catch (e) { next(e); }
 });
 
-r.get('/testers', async (_req: any, res, next) => {
+r.get('/testers', async (req: any, res, next) => {
   try {
-    const [users, reports] = await Promise.all([User.find({ role: 'TESTER', isActive: true }).select('firstName lastName email createdAt').sort({ lastName: 1, firstName: 1 }).lean(), TestReport.find({}).select('testReportId status testerId submittedBy testerNameSnapshot instrument updatedAt').sort({ updatedAt: -1 }).lean()]);
+    const testerIds = await reviewerTesterIds(req.user);
+    const [users, reports] = await Promise.all([User.find({ role: 'TESTER', isActive: true, _id: { $in: testerIds } }).select('firstName lastName email createdAt').sort({ lastName: 1, firstName: 1 }).lean(), TestReport.find(reviewerReportOwnerFilter(testerIds)).select('testReportId status testerId submittedBy testerNameSnapshot instrument updatedAt').sort({ updatedAt: -1 }).lean()]);
     res.json({ testers: buildReviewerTesterDirectory(users, reports) });
   } catch (e) { next(e); }
 });
@@ -117,7 +125,9 @@ r.get('/notifications', async (req: any, res, next) => {
   try {
     const testerId = String(req.query.testerId || '').trim();
     if (testerId && !mongoose.isValidObjectId(testerId)) return res.status(400).json({ message: 'Select a valid tester before loading notifications.' });
-    const reportFilter = testerId ? { $or: [{ testerId }, { submittedBy: testerId }] } : {};
+    const allowedTesterIds = await reviewerTesterIds(req.user);
+    if (testerId && !reviewerCanSelectTester(allowedTesterIds, testerId)) return res.status(404).json({ message: 'Tester not found in this reviewer workspace.' });
+    const reportFilter = reviewerReportOwnerFilter(allowedTesterIds, testerId || undefined);
     const reports: any[] = await TestReport.find(reportFilter).select('_id testReportId testerNameSnapshot status').lean();
     if (!reports.length) return res.json({ notifications: [], unreadCount: 0 });
     const reportIds = reports.map(report => report._id);
@@ -147,8 +157,9 @@ r.patch('/notifications/:notificationId/read', async (req: any, res, next) => {
     if (!parsed) return res.status(404).json({ message: 'Notification not found.' });
     const testerId = String(req.query.testerId || '').trim();
     if (testerId && !mongoose.isValidObjectId(testerId)) return res.status(400).json({ message: 'Select a valid tester before updating notifications.' });
-    const reportFilter: any = {};
-    if (testerId) reportFilter.$or = [{ testerId }, { submittedBy: testerId }];
+    const allowedTesterIds = await reviewerTesterIds(req.user);
+    if (testerId && !reviewerCanSelectTester(allowedTesterIds, testerId)) return res.status(404).json({ message: 'Tester not found in this reviewer workspace.' });
+    const reportFilter: any = reviewerReportOwnerFilter(allowedTesterIds, testerId || undefined);
     const now = new Date();
     if (parsed.type === 'message') {
       const message: any = await ReportMessage.findById(parsed.id);
@@ -172,6 +183,8 @@ r.get('/instruments', async (req: any, res, next) => {
     const testerId = String(req.query.testerId || '').trim();
     if (!testerId) return res.json({ instruments: [] });
     if (!mongoose.isValidObjectId(testerId)) return res.status(400).json({ message: 'Select a valid tester before loading instruments.' });
+    const allowedTesterIds = await reviewerTesterIds(req.user);
+    if (!reviewerCanSelectTester(allowedTesterIds, testerId)) return res.status(404).json({ message: 'Tester not found in this reviewer workspace.' });
     const [instruments, reports]: [any[], any[]] = await Promise.all([
       Instrument.find({ registeredBy: testerId }).sort({ updatedAt: -1, createdAt: -1 }).lean(),
       TestReport.find({ $or: [{ testerId }, { submittedBy: testerId }] }).select('testReportId instrumentId status updatedAt testerId submittedBy').sort({ updatedAt: -1 }).lean(),
@@ -183,8 +196,9 @@ r.get('/instruments', async (req: any, res, next) => {
 r.get('/instruments/:id', async (req: any, res, next) => {
   try {
     const instrument: any = await Instrument.findById(req.params.id).lean();
-    if (!instrument) return res.status(404).json({ message: 'Instrument not found.' });
-    const reports: any[] = await TestReport.find({ instrumentId: instrument._id }).select('testReportId status stage instrument testerNameSnapshot updatedAt submittedForReviewAt reviewedAt').sort({ updatedAt: -1 }).lean();
+    const allowedTesterIds = await reviewerTesterIds(req.user);
+    if (!instrument || !reviewerCanSelectTester(allowedTesterIds, String(instrument.registeredBy))) return res.status(404).json({ message: 'Instrument not found.' });
+    const reports: any[] = await TestReport.find(andFilters({ instrumentId: instrument._id }, reviewerReportOwnerFilter(allowedTesterIds))).select('testReportId status stage instrument testerNameSnapshot updatedAt submittedForReviewAt reviewedAt').sort({ updatedAt: -1 }).lean();
     res.json({ instrument: { ...instrument, id: String(instrument._id), _id: undefined }, reports: reports.map(report => ({ ...report, id: String(report._id), _id: undefined })) });
   } catch (e) { next(e); }
 });
@@ -194,9 +208,11 @@ r.get('/evidence', async (req: any, res, next) => {
     const testerId = String(req.query.testerId || '').trim();
     if (!testerId) return res.json({ evidence: [] });
     if (!mongoose.isValidObjectId(testerId)) return res.status(400).json({ message: 'Select a valid tester before loading evidence.' });
+    const allowedTesterIds = await reviewerTesterIds(req.user);
+    if (!reviewerCanSelectTester(allowedTesterIds, testerId)) return res.status(404).json({ message: 'Tester not found in this reviewer workspace.' });
     const evidence: any[] = await Evidence.find({ status: 'ACTIVE' }).select('-data').sort({ capturedAt: -1, createdAt: -1 }).lean();
     const reportIds = [...new Set(evidence.map(item => String(item.reportId)))];
-    const reports: any[] = await TestReport.find({ _id: { $in: reportIds }, status: { $in: ['AWAITING_REVIEW', 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'COMPLETED', 'REJECTED', 'RETEST_REQUIRED'] }, $or: [{ testerId }, { submittedBy: testerId }] }).select('testReportId instrument status testerId submittedBy testerNameSnapshot').lean();
+    const reports: any[] = await TestReport.find(andFilters({ _id: { $in: reportIds }, status: { $in: ['AWAITING_REVIEW', 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'COMPLETED', 'REJECTED', 'RETEST_REQUIRED'] }, $or: [{ testerId }, { submittedBy: testerId }] }, reviewerReportOwnerFilter(allowedTesterIds))).select('testReportId instrument status testerId submittedBy testerNameSnapshot').lean();
     const byId = new Map(reports.map(report => [String(report._id), report]));
     const testerIds = [...new Set(reports.flatMap(report => [report.testerId, report.submittedBy].filter(Boolean).map(String)))];
     const testers: any[] = testerIds.length ? await User.find({ _id: { $in: testerIds } }).select('firstName lastName email role').lean() : [];
@@ -214,7 +230,7 @@ r.get('/evidence', async (req: any, res, next) => {
 
 r.get('/reports/:id', async (req: any, res, next) => {
   try {
-    const report: any = await findReport(String(req.params.id));
+    const report: any = await findReport(String(req.params.id), req.user);
     if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const state = await buildReviewState(report);
     const evidence = await Evidence.find({ reportId: report._id, status: 'ACTIVE' }).select('+data -__v').sort({ capturedAt: 1, createdAt: 1 }).lean();
@@ -226,7 +242,7 @@ r.get('/reports/:id', async (req: any, res, next) => {
 
 r.post('/reports/:id/messages', async (req: any, res, next) => {
   try {
-    const report: any = await findReport(String(req.params.id));
+    const report: any = await findReport(String(req.params.id), req.user);
     if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const body = z.object({ subject: z.string().trim().min(1, 'Subject is required.').max(200), message: z.string().trim().min(1, 'Message is required.').max(10000) }).parse(req.body);
     const created = await ReportMessage.create({ reportId: report._id, senderId: req.user._id, senderNameSnapshot: reviewerName(req.user), senderRole: req.user.role, recipientRole: 'TESTER', subject: body.subject, message: body.message });
@@ -237,7 +253,7 @@ r.post('/reports/:id/messages', async (req: any, res, next) => {
 
 async function transition(req: any, res: any, next: any, action: 'APPROVE' | 'REJECT') {
   try {
-    const report: any = await findReport(String(req.params.id));
+    const report: any = await findReport(String(req.params.id), req.user);
     if (!report) return res.status(404).json({ message: 'Test report not found.' });
     let nextState: { status: string; stage: string };
     try { nextState = finalReviewTransition(String(report.status), action); } catch (error: any) { return res.status(409).json({ message: error.message, code: 'REVIEW_STATE_INVALID' }); }
@@ -253,7 +269,7 @@ r.post('/reports/:id/reject', (req, res, next) => void transition(req, res, next
 
 r.post('/reports/:id/retests', async (req: any, res, next) => {
   try {
-    const report: any = await findReport(String(req.params.id));
+    const report: any = await findReport(String(req.params.id), req.user);
     if (!report) return res.status(404).json({ message: 'Test report not found.' });
     if (!canRequestRetest(report.status, isSyntheticPrototypeReport(report))) return res.status(409).json({ message: 'Retest can only be requested for a report awaiting review, or for a rejected synthetic prototype record.' });
     const body = z.object({ testCode: z.string().min(1), targetPhaseCode: z.string().trim().optional(), reason: z.string().trim().min(1, 'A retest reason is required.').max(5000), instructions: z.string().trim().max(5000).optional().default('') }).parse(req.body);
@@ -281,7 +297,7 @@ r.post('/reports/:id/retests', async (req: any, res, next) => {
 
 r.get('/reports/:id/pdf', async (req: any, res, next) => {
   try {
-    const report: any = await findReport(String(req.params.id));
+    const report: any = await findReport(String(req.params.id), req.user);
     if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const documentStatus = String(req.query.kind || 'draft').toLowerCase() === 'final' ? 'FINAL' : 'DRAFT';
     if (documentStatus === 'FINAL' && report.status !== 'COMPLETED') return res.status(409).json({ message: 'The final PDF is available only after reviewer approval.' });

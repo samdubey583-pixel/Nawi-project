@@ -1,6 +1,14 @@
 {
   "name": "nawi-test-report-system",
   "private": true,
-  "scripts": {"dev": "node scripts/dev.mjs", "install:all": "npm install && npm install --prefix server && npm install --prefix client"},
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
+    "build": "npm run build --prefix server && npm run build --prefix client",
+    "test": "npm run test --prefix server && npm run test --prefix client",
+    "start": "npm run start --prefix server",
+    "seed:admin": "npm run seed:admin --prefix server",
+    "seed:production-demo": "npm run seed:production-demo --prefix server"
+  },
   "devDependencies": {"concurrently": "^9.1.2"}
 }

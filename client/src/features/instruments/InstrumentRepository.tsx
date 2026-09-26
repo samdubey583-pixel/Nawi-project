@@ -61,14 +61,7 @@ function InstrumentFields({ form, set }: { form: InstrumentForm; set: (key: keyo
       <Select label="Range Configuration" value={form.rangeType} onChange={value => set('rangeType', value)} options={['single-range', 'multiple-range']} />
       <Select label="Interval Configuration" value={form.intervalType} onChange={value => set('intervalType', value)} options={['single-interval', 'multi-interval']} />
       <Select label="Tare Device Present" value={form.tareDevicePresent || form.tareDevice} onChange={value => { set('tareDevicePresent', value); set('tareDevice', value); }} options={yesNo} />
-      {form.tareDevicePresent === 'Yes' && <>
-        <Select label="Tare Type" value={form.tareType} onChange={value => set('tareType', value)} options={['SUBTRACTIVE', 'ADDITIVE']} />
-        <Field label={`Maximum Tare Effect (${form.unit})`} type="number" value={form.maximumTareEffect} onChange={value => set('maximumTareEffect', value)} />
-        <Select label="Tare Operation Mode" value={form.tareOperationMode} onChange={value => set('tareOperationMode', value)} options={['NON_AUTOMATIC', 'SEMI_AUTOMATIC', 'AUTOMATIC']} />
-        <Select label="Separate Tare-weighing Device Present" value={form.tareWeighingDevicePresent} onChange={value => set('tareWeighingDevicePresent', value)} options={yesNo} />
-        <Select label="Preset Tare Device Present" value={form.presetTareDevicePresent} onChange={value => set('presetTareDevicePresent', value)} options={yesNo} />
-        <p className="instrument-config-note">These persisted tare characteristics determine A.4.6 applicability and its required procedures.</p>
-      </>}
+      {form.tareDevicePresent === 'Yes' && <p className="instrument-config-note">Detailed tare characteristics are recorded in this report’s A.4.6 setup when that test begins.</p>}
       <Select label="Multiple Indicating Devices" value={form.multipleIndicatingDevices} onChange={value => set('multipleIndicatingDevices', value)} options={yesNo} />
       <Select label="Load Receptor / Platform Type" value={form.loadReceptorType} onChange={value => set('loadReceptorType', value)} options={['normal platform', 'other / special configuration']} />
       <Field label="Number of Support Points" type="number" required={false} value={form.numberOfSupportPoints} onChange={value => set('numberOfSupportPoints', value)} />
@@ -85,12 +78,17 @@ function InstrumentFields({ form, set }: { form: InstrumentForm; set: (key: keyo
       <Field label="Manufacturer Limiting Tilt" type="number" required={false} value={form.manufacturerTiltLimit} onChange={value => set('manufacturerTiltLimit', value)} />
       <Select label="Mobile Outdoor Use" value={form.mobileOutdoorUse} onChange={value => set('mobileOutdoorUse', value)} options={yesNo} required={false} />
       <Select label="A.5 Power Source" value={form.powerSourceType} onChange={value => set('powerSourceType', value)} options={['AC_MAINS', 'EXTERNAL_AC_DC', 'NON_RECHARGEABLE_BATTERY', 'ROAD_VEHICLE_BATTERY_12V', 'ROAD_VEHICLE_BATTERY_24V']} required={false} />
-      <Field label="Nominal Voltage (V)" type="number" required={false} value={form.nominalVoltage} onChange={value => set('nominalVoltage', value)} />
-      <Field label="Minimum Operating Voltage (V)" type="number" required={false} value={form.minimumOperatingVoltage} onChange={value => set('minimumOperatingVoltage', value)} />
-      <Field label="Upper Voltage (V)" type="number" required={false} value={form.maximumVoltage} onChange={value => set('maximumVoltage', value)} />
-      <Field label="Specified Voltage Minimum (V)" type="number" required={false} value={form.specifiedVoltageMin} onChange={value => set('specifiedVoltageMin', value)} />
-      <Field label="Specified Voltage Maximum (V)" type="number" required={false} value={form.specifiedVoltageMax} onChange={value => set('specifiedVoltageMax', value)} />
-      <Select label="Three-phase Supply" value={form.threePhaseSupply} onChange={value => set('threePhaseSupply', value)} options={yesNo} required={false} />
+      {form.powerSourceType && <Field label="Nominal Voltage (V)" type="number" required={false} value={form.nominalVoltage} onChange={value => set('nominalVoltage', value)} />}
+      {form.powerSourceType === 'AC_MAINS' && <>
+        <Field label="Declared AC Range — Minimum (V)" type="number" required={false} value={form.specifiedVoltageMin} onChange={value => set('specifiedVoltageMin', value)} />
+        <Field label="Declared AC Range — Maximum (V)" type="number" required={false} value={form.specifiedVoltageMax} onChange={value => set('specifiedVoltageMax', value)} />
+        <Select label="Three-phase Supply" value={form.threePhaseSupply} onChange={value => set('threePhaseSupply', value)} options={yesNo} required={false} />
+      </>}
+      {form.powerSourceType && form.powerSourceType !== 'AC_MAINS' && !form.powerSourceType.startsWith('ROAD_VEHICLE_BATTERY_') && <>
+        <Field label="Minimum Operating Voltage (V)" type="number" required={false} value={form.minimumOperatingVoltage} onChange={value => set('minimumOperatingVoltage', value)} />
+        <Field label="Maximum / Specified Upper Voltage (V)" type="number" required={false} value={form.maximumVoltage} onChange={value => set('maximumVoltage', value)} />
+      </>}
+      {!form.powerSourceType && <p className="instrument-config-note">Select an A.5 power source to show only the voltage values used by that supply type.</p>}
       <Select label="Rechargeable Battery" value={form.rechargeableBattery} onChange={value => set('rechargeableBattery', value)} options={yesNo} required={false} />
       <Select label="Battery Charges During Operation" value={form.rechargeableBatteryCanChargeDuringOperation} onChange={value => set('rechargeableBatteryCanChargeDuringOperation', value)} options={yesNo} required={false} />
       <Field label="Specified Minimum Temperature (°C)" type="number" allowNegative required={false} value={form.specifiedMinimumTemperature} onChange={value => set('specifiedMinimumTemperature', value)} />
@@ -123,15 +121,16 @@ function InstrumentFields({ form, set }: { form: InstrumentForm; set: (key: keyo
 
 const payloadFor = (form: InstrumentForm) => {
   const n = Number(form.max) / Number(form.e);
+  const instrumentForm: Partial<InstrumentForm> = { ...form };
+  delete instrumentForm.tareType;
+  delete instrumentForm.maximumTareEffect;
+  delete instrumentForm.tareOperationMode;
+  delete instrumentForm.tareWeighingDevicePresent;
+  delete instrumentForm.presetTareDevicePresent;
   return {
-    ...form, min: Number(form.min), max: Number(form.max), e: Number(form.e), d: Number(form.d), n,
+    ...instrumentForm, min: Number(form.min), max: Number(form.max), e: Number(form.e), d: Number(form.d), n,
     numberOfSupportPoints: form.numberOfSupportPoints.trim() === '' ? undefined : Number(form.numberOfSupportPoints),
     tareDevicePresent: form.tareDevicePresent === 'Yes' ? true : form.tareDevicePresent === 'No' ? false : form.tareDevice === 'Yes' ? true : form.tareDevice === 'No' ? false : undefined,
-    tareType: form.tareType || undefined,
-    maximumTareEffect: form.maximumTareEffect.trim() === '' ? undefined : { value: Number(form.maximumTareEffect), unit: form.unit },
-    tareOperationMode: form.tareOperationMode || undefined,
-    tareWeighingDevicePresent: form.tareWeighingDevicePresent === 'Yes' ? true : form.tareWeighingDevicePresent === 'No' ? false : undefined,
-    presetTareDevicePresent: form.presetTareDevicePresent === 'Yes' ? true : form.presetTareDevicePresent === 'No' ? false : undefined,
     multipleIndicatingDevices: form.multipleIndicatingDevices === 'Yes', zeroTracking: form.zeroTracking === 'Yes', zeroIndicatingDevice: form.zeroIndicatingDevice === 'Yes', digitalIndication: form.digitalIndication === 'Yes',
     usesElectricPower: form.usesElectricPower === 'Yes', mobileInstrument: form.mobileInstrument === 'Yes', portableRoadVehicleInstrument: form.portableRoadVehicleInstrument === 'Yes', rollingLoad: form.rollingLoad === 'Yes', stableEquilibriumFunction: form.stableEquilibriumFunction === 'Yes', printingCapability: form.printingCapability === 'Yes', dataStorageCapability: form.dataStorageCapability === 'Yes', zeroSettingCapability: form.zeroSettingCapability === 'Yes', tareCapability: form.tareCapability === 'Yes', differentiatedScaleDivisions: form.differentiatedScaleDivisions === 'Yes',
      hasLevelIndicator: form.hasLevelIndicator === '' ? undefined : form.hasLevelIndicator === 'Yes', hasAutomaticTiltSensor: form.hasAutomaticTiltSensor === '' ? undefined : form.hasAutomaticTiltSensor === 'Yes', manufacturerTiltLimit: form.manufacturerTiltLimit.trim() === '' ? undefined : Number(form.manufacturerTiltLimit), tiltConfiguration: form.tiltConfiguration === '' ? undefined : form.tiltConfiguration === 'Yes', mobileOutdoorUse: form.mobileOutdoorUse === '' ? undefined : form.mobileOutdoorUse === 'Yes',

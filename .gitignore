@@ -3,3 +3,9 @@ dist/
 .env
 .env.*
 !.env.example
+**/*.tsbuildinfo
+coverage/
+.vercel/
+outputs/
+server/tmp/
+.tmp-evidence-gallery/

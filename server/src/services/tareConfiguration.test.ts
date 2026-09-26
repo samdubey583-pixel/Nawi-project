@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyTareConfiguration, tareConfigurationCanBeEdited, tareConfigurationInput } from './tareConfiguration.js';
+import { applyTareConfiguration, applyTareConfigurationAtStart, tareConfigurationCanBeEdited, tareConfigurationInput } from './tareConfiguration.js';
 
 const input = tareConfigurationInput.parse({ tareType: 'SUBTRACTIVE', maximumTareEffect: { value: 500, unit: 'g' }, tareOperationMode: 'SEMI_AUTOMATIC', tareWeighingDevicePresent: false, presetTareDevicePresent: false });
 
 test('saves a valid tare configuration to the report snapshot without replacing other instrument fields', () => {
   const current = { typeDesignation: 'Prototype platform', unit: 'g', max: 1000, tareDevice: 'Yes', serialNumber: 'SYN-01' };
   assert.deepEqual(applyTareConfiguration(current, input), { ...current, tareDevicePresent: true, tareType: 'SUBTRACTIVE', maximumTareEffect: { value: 500, unit: 'g' }, tareOperationMode: 'SEMI_AUTOMATIC', tareWeighingDevicePresent: false, presetTareDevicePresent: false });
+});
+
+test('A.4.6 start configuration validates and returns a configured report snapshot without mutating its input', () => {
+  const reportSnapshot: Record<string, any> = { typeDesignation: 'Prototype platform', unit: 'g', max: 1000, tareDevice: 'Yes', serialNumber: 'SYN-01' };
+  const result = applyTareConfigurationAtStart(reportSnapshot, input);
+  assert.equal(result.tareType, 'SUBTRACTIVE');
+  assert.equal(result.maximumTareEffect.value, 500);
+  assert.equal(reportSnapshot.tareType, undefined);
+  assert.throws(() => applyTareConfigurationAtStart(reportSnapshot, { ...input, maximumTareEffect: { value: 0, unit: 'g' } }));
 });
 
 test('rejects tare configuration inconsistent with a no-tare instrument or exceeding Max', () => {

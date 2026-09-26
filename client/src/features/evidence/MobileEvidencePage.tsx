@@ -5,6 +5,7 @@ import { useParams } from 'react-router-dom';
 import './evidence.css';
 
 type MobileSession = { id: string; label: string; testName?: string; reportNumber?: string; instrument?: string; status: string; expiresAt: string };
+const MAX_EVIDENCE_BYTES = 3 * 1024 * 1024;
 
 const readDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader();
@@ -41,7 +42,7 @@ export default function MobileEvidencePage() {
   const chooseFile = (next: File | undefined) => {
     if (!next) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(next.type)) { setError('Choose a JPEG, PNG, or WebP photo.'); return; }
-    if (next.size > 5 * 1024 * 1024) { setError('Photo must be smaller than 5 MB.'); return; }
+    if (next.size > MAX_EVIDENCE_BYTES) { setError('Photo must be 3 MB or smaller.'); return; }
     setError(''); setMessage(''); setFile(next); setPreview(URL.createObjectURL(next));
   };
 
@@ -85,7 +86,7 @@ export default function MobileEvidencePage() {
       <label className="mobile-evidence-notes">Optional notes<textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What does this image show?" /></label>
       <div className="mobile-evidence-actions"><button className="mobile-evidence-secondary" onClick={resetCapture} disabled={busy}><RotateCcw size={16} /> Retake</button><button className="mobile-evidence-primary" onClick={() => void upload()} disabled={busy}><Upload size={16} /> {busy ? 'Uploading…' : 'Upload Evidence'}</button></div>
     </>}
-    {!closed && !file && !message && <button className="mobile-evidence-close" onClick={() => void done()} disabled={busy}><X size={15} /> Done</button>}
+    {!closed && <button className="mobile-evidence-close" onClick={() => void done()} disabled={busy}><X size={15} /> Done</button>}
     {!closed && message && <button className="mobile-evidence-primary mobile-capture-another" onClick={resetCapture}><Camera size={17} /> Capture Another</button>}
   </section></main>;
 }

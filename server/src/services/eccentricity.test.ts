@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculationForPosition, eccentricityPositions } from './eccentricity.js';
+import { applyMissingEccentricityReportConfiguration, calculationForPosition, eccentricityPositions } from './eccentricity.js';
+
+test('A.4.7 setup fills missing report-snapshot geometry without mutating source or overriding recorded fields', () => {
+  const registeredInstrument = { loadReceptorType: 'normal platform', numberOfSupportPoints: 4 };
+  const reportSnapshot = { ...registeredInstrument };
+  const configured = applyMissingEccentricityReportConfiguration(reportSnapshot, { mobileInstrument: false, rollingLoad: false });
+  assert.deepEqual(configured, { ...reportSnapshot, mobileInstrument: false, rollingLoad: false });
+  assert.deepEqual(registeredInstrument, { loadReceptorType: 'normal platform', numberOfSupportPoints: 4 });
+  assert.throws(() => applyMissingEccentricityReportConfiguration(reportSnapshot, { numberOfSupportPoints: 3 }), /already recorded/);
+});
 
 test('creates four quarter positions for A.4.7.1', () => {
   assert.deepEqual(eccentricityPositions('A.4.7.1', 4).map(position => position.label), ['Quarter 1', 'Quarter 2', 'Quarter 3', 'Quarter 4']);

@@ -17,18 +17,18 @@ import { calculateChangeoverError, calculateZeroError } from '../services/weighi
 import { calculateZeroSettingStabilityObservation } from '../services/stabilityOfEquilibrium.js';
 import { ZeroCheckingTest } from '../models/ZeroCheckingTest.js';
 import { ZeroSettingBeforeLoadingTest } from '../models/ZeroSettingBeforeLoadingTest.js';
-import { evaluateNonAutomaticZeroSettingProcedure, sourceFingerprint, sourcePhaseFromTest, sourcePhaseIsComplete, validateZeroSettingCompletion } from '../services/zeroSettingBeforeLoading.js';
+import { evaluateNonAutomaticZeroSettingCompletion, evaluateNonAutomaticZeroSettingProcedure, sourceFingerprint, sourcePhaseFromTest, sourcePhaseIsComplete, validateZeroSettingCompletion } from '../services/zeroSettingBeforeLoading.js';
 import { TareTest } from '../models/TareTest.js';
 import { calculateNetLoad, calculateTareSettingObservation, deriveTareSettingProcedure, deriveTareSettingProcedureFromSnapshots, evaluateTareCompletion, evaluateTareSettingCompletion, generateTareLoadPlan, tareSettingAccuracyResult, validateTareLoadObservation, validateTareSettingObservation } from '../services/tareCalculations.js';
 import { calculateTareDeviceComparison, tareDeviceCompletionAllowed, tareDeviceObservationLimitReached, validateTareDeviceComparison } from '../services/tareDeviceComparison.js';
 import { activateNextApplicableTarePhase, deriveTareReadiness, tareConfigurationsMatch, tareSettingExecutionHasBegun } from '../services/tareWorkflow.js';
 import { completeTareSettingPhase, recalculateTareLoadPhase, recalculateTareSettingPhase, tareObservationIdentity, tareSettingObservationLimitReached, tareSettingPhaseIsMutable } from '../services/tareObservationWorkflow.js';
 import { validateScaleIntervals } from '../services/scaleInterval.js';
-import { applyTareConfiguration, tareConfigurationCanBeEdited, tareConfigurationInput } from '../services/tareConfiguration.js';
+import { applyTareConfiguration, applyTareConfigurationAtStart, tareConfigurationCanBeEdited, tareConfigurationInput } from '../services/tareConfiguration.js';
 import { EccentricityTest } from '../models/EccentricityTest.js';
 import { MultipleIndicatingDeviceTest } from '../models/MultipleIndicatingDeviceTest.js';
 import { deriveMultipleIndicatingComparisons, recordMissingDeviceIndication, MULTIPLE_INDICATING_RULE_REFERENCE, MULTIPLE_INDICATING_SOURCE, MULTIPLE_INDICATING_TEST_VERSION, sourceFingerprint as multipleIndicatingSourceFingerprint } from '../services/multipleIndicatingDevices.js';
-import { calculationForPosition, eccentricityFingerprint, eccentricityPositions, ECCENTRICITY_SOURCE, ECCENTRICITY_TEST_VERSION } from '../services/eccentricity.js';
+import { applyMissingEccentricityReportConfiguration, calculationForPosition, eccentricityFingerprint, eccentricityPositions, ECCENTRICITY_SOURCE, ECCENTRICITY_TEST_VERSION } from '../services/eccentricity.js';
 import { discriminationConfigurationChanged, discriminationFingerprint, discriminationStages, evaluateAnalogDiscriminationObservation, evaluateDiscriminationObservation, DISCRIMINATION_RULE_REFERENCE, DISCRIMINATION_SOURCE, DISCRIMINATION_TEST_VERSION } from '../services/discrimination.js';
 import { DiscriminationTest } from '../models/DiscriminationTest.js';
 import { SensitivityTest } from '../models/SensitivityTest.js';
@@ -41,7 +41,7 @@ import { calculateCreepP, calculateVariationMpe, CREEP_CHECKPOINTS, evaluateCree
 import { consolidateDocumentationDetails, evaluateContinuousDisturbance, evaluateDocumentationReview, evaluatePrintStorageRepetition, evaluateStabilityRepetitions, stabilityFingerprint, stabilityLoadL0, stabilityPlan, STABILITY_ENGINE_VERSION, STABILITY_REPETITIONS, STABILITY_RULE_SET, STABILITY_SOURCE, STABILITY_TEST_VERSION, normalizeMass, type StabilityOperation } from '../services/stabilityOfEquilibrium.js';
 import { testerReportAccessFilter, hasTesterReportAccess, testerExecutionIsLocked } from '../services/reportAccess.js';
 import { InfluenceFactorsTest } from '../models/InfluenceFactorsTest.js';
-import { evaluateInfluenceFactors, influenceFactorsFingerprint, influenceFactorsPlan, calculateInfluenceFactorsError, evaluateInfluenceFactorsCompliance, recalculateSavedTiltingObservation, validateWarmUpAttestation, validateVoltageObservationCoverage, INFLUENCE_FACTORS_ENGINE_VERSION, INFLUENCE_FACTORS_RULE_SET, INFLUENCE_FACTORS_SOURCE, INFLUENCE_FACTORS_TEST_VERSION } from '../services/influenceFactors.js';
+import { evaluateInfluenceFactors, influenceFactorsFingerprint, influenceFactorsSnapshotMatches, influenceFactorsPlan, calculateInfluenceFactorsError, evaluateInfluenceFactorsCompliance, recalculateSavedTiltingObservation, validateWarmUpAttestation, validateVoltageObservationCoverage, validateVoltageObservationReadings, INFLUENCE_FACTORS_ENGINE_VERSION, INFLUENCE_FACTORS_RULE_SET, INFLUENCE_FACTORS_SOURCE, INFLUENCE_FACTORS_TEST_VERSION } from '../services/influenceFactors.js';
 import { EnduranceTest } from '../models/EnduranceTest.js';
 import { buildDraftReportPdf } from '../services/reportPdf.js';
 import { deriveOverallResult } from '../services/reportReview.js';
@@ -52,7 +52,9 @@ import { deriveZeroIndicatorIncrement, validateSignedZeroRanges, validateZeroInd
 import { requiredEvidenceTestIds } from '../services/evidenceDefinitions.js';
 import { RetestRequest } from '../models/RetestRequest.js';
 import { executionStateForOpenRetest, isRetestPathForTest, resetActiveTestAttempt } from '../services/retest.js';
-import { isTestExecutionTerminal, resolveTestExecutionAvailability, type ExecutionState } from '../services/testExecutionAvailability.js';
+import { isRequiredExecutableTest, isTestExecutionTerminal, resolveTestExecutionAvailability, type ExecutionState } from '../services/testExecutionAvailability.js';
+import { isSubmissionAttentionTest, reportSubmissionReadiness } from '../services/reportSubmissionReadiness.js';
+import { canUseSyntheticDemoConditions, syntheticDemoConditionProfile } from '../services/syntheticDemoConditions.js';
 
 const r = Router();
 const text = z.string().trim().min(1);
@@ -394,6 +396,33 @@ r.post('/:id/zero-setting-before-loading/start', async (req: any, res, next) => 
   } catch (e) { next(e); }
 });
 
+r.post('/:id/zero-setting-before-loading/draft', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await zeroSettingBeforeLoadingState(report);
+    const test: any = state.test;
+    if (!test || test.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Only an in-progress A.4.3 procedure can save a draft.' });
+    if (test.methodUsed === 'A.4.3(b)' && (!state.sourceReady || !state.fingerprint || test.sourceFingerprint !== state.fingerprint)) return res.status(409).json({ message: 'A.4.2.3 changed. Revalidate the zero reference before continuing.', code: 'REVALIDATION_REQUIRED' });
+    const procedureSchema = z.object({ halfIntervalWeightApplied: z.boolean(), indicationAlternatedAtZero: z.boolean(), halfIntervalWeightRemoved: z.boolean(), centreOfZeroReferenceReached: z.boolean() }).partial();
+    const data = z.object({
+      executionMode: z.enum(['PHYSICAL', 'SYNTHETIC_SIMULATION']),
+      modeConfirmations: z.object({ physical: z.boolean(), syntheticSimulation: z.boolean() }),
+      operatorNotes: z.string().max(2000).default(''),
+      procedureObservations: procedureSchema.default({}),
+    }).parse(req.body);
+    test.executionMode = data.executionMode;
+    test.modeConfirmations = data.modeConfirmations;
+    test.operatorNotes = data.operatorNotes;
+    if (test.methodUsed === 'A.4.3(a)') {
+      if (data.executionMode === 'PHYSICAL') test.procedureObservations = data.procedureObservations;
+      else test.set('procedureObservations', undefined);
+    }
+    test.updatedBy = req.user._id;
+    await test.save();
+    res.json({ report, applicability: state.applicability, source: state.source, test: publicZeroSetting(test) });
+  } catch (e) { next(e); }
+});
+
 r.post('/:id/zero-setting-before-loading/complete', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
@@ -402,19 +431,25 @@ r.post('/:id/zero-setting-before-loading/complete', async (req: any, res, next) 
     if (!test || test.status !== 'IN_PROGRESS') return res.status(409).json({ message: 'Start A.4.3 after completing A.4.2.3.', code: 'DEPENDENCY_REQUIRED' });
     if (test.methodUsed === 'A.4.3(b)' && (!state.sourceReady || !state.fingerprint || test.sourceFingerprint !== state.fingerprint)) { test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; await test.save(); return res.status(409).json({ message: 'A.4.2.3 changed. Revalidate the zero reference before continuing.', code: 'REVALIDATION_REQUIRED' }); }
     const procedureSchema = z.object({ halfIntervalWeightApplied: z.boolean(), indicationAlternatedAtZero: z.boolean(), halfIntervalWeightRemoved: z.boolean(), centreOfZeroReferenceReached: z.boolean() });
-    const data = z.object({ zeroReferenceEstablished: z.literal(true), executionMode: z.enum(['PHYSICAL', 'SYNTHETIC_SIMULATION']).default('PHYSICAL'), operatorNotes: z.string().optional().default(''), procedureObservations: procedureSchema.optional() }).parse(req.body);
-    const completion = validateZeroSettingCompletion({ confirmed: data.zeroReferenceEstablished, executionMode: data.executionMode, operatorNotes: data.operatorNotes });
+    const data = z.object({ executionMode: z.enum(['PHYSICAL', 'SYNTHETIC_SIMULATION']).default('PHYSICAL'), modeConfirmations: z.object({ physical: z.boolean(), syntheticSimulation: z.boolean() }), operatorNotes: z.string().optional().default(''), procedureObservations: procedureSchema.optional() }).parse(req.body);
+    const completion = validateZeroSettingCompletion({ executionMode: data.executionMode, modeConfirmations: data.modeConfirmations, operatorNotes: data.operatorNotes });
     if (!completion.valid) return res.status(400).json({ message: completion.message, code: 'INVALID_COMPLETION_ATTESTATION' });
     if (test.methodUsed === 'A.4.3(a)') {
-      const observations = procedureSchema.safeParse(data.procedureObservations);
-      if (!observations.success) return res.status(400).json({ message: 'Complete each A.4.3(a) procedural observation before saving.', code: 'PROCEDURE_OBSERVATIONS_REQUIRED' });
-      const evaluation = evaluateNonAutomaticZeroSettingProcedure(observations.data);
-      test.procedureObservations = observations.data;
+      let evaluation: { complete: boolean; result: 'PASS' | 'FAIL' };
+      if (data.executionMode === 'PHYSICAL') {
+        const observations = procedureSchema.safeParse(data.procedureObservations);
+        if (!observations.success) return res.status(400).json({ message: 'Complete each A.4.3(a) physical procedural observation before saving.', code: 'PROCEDURE_OBSERVATIONS_REQUIRED' });
+        evaluation = evaluateNonAutomaticZeroSettingProcedure(observations.data);
+        test.procedureObservations = observations.data;
+      } else {
+        evaluation = evaluateNonAutomaticZeroSettingCompletion(data.executionMode, data.procedureObservations || {} as any);
+        test.set('procedureObservations', undefined);
+      }
       test.result = evaluation.result;
     } else {
       test.result = state.sourcePhase.result === 'FAIL' || state.sourcePhase.calculations?.complianceResult === 'FAIL' ? 'FAIL' : 'PASS';
     }
-    test.zeroReferenceEstablished = data.zeroReferenceEstablished; test.executionMode = data.executionMode; test.operatorNotes = data.operatorNotes; test.status = 'COMPLETED'; test.completedAt = new Date(); test.updatedBy = req.user._id;
+    test.zeroReferenceEstablished = true; test.executionMode = data.executionMode; test.modeConfirmations = data.modeConfirmations; test.operatorNotes = data.operatorNotes; test.status = 'COMPLETED'; test.completedAt = new Date(); test.updatedBy = req.user._id;
     await test.save();
     res.json({ report, applicability: state.applicability, source: state.source, test: publicZeroSetting(test) });
   } catch (e) { next(e); }
@@ -668,7 +703,21 @@ r.patch('/:id/tare/configuration', async (req: any, res, next) => {
 
 r.post('/:id/tare/start', async (req: any, res, next) => {
   try {
-    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' }); const state = await tareState(report);
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    let state = await tareState(report);
+    const requestBody = req.body ?? {};
+    const suppliedConfiguration = requestBody.tareConfiguration;
+    if (suppliedConfiguration !== undefined) {
+      if (!tareConfigurationCanBeEdited(report.status, Boolean(state.test))) return res.status(409).json({ message: 'Tare configuration can only be supplied before A.4.6 starts on an actively testing report.', code: state.test ? 'TARE_TEST_ALREADY_STARTED' : 'REPORT_LOCKED' });
+      try {
+        const currentInstrument = report.instrument?.toObject ? report.instrument.toObject() : (report.instrument || {});
+        report.instrument = applyTareConfigurationAtStart(currentInstrument as Record<string, any>, suppliedConfiguration) as any;
+        report.markModified('instrument');
+      } catch (error: any) {
+        return res.status(400).json({ message: error.message || 'Tare configuration is inconsistent with the instrument profile.', code: 'INVALID_TARE_CONFIGURATION' });
+      }
+      state = await tareState(report);
+    }
     if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.6 requires complete tare configuration.', code: 'CONFIGURATION_REQUIRED' });
     if (!state.readiness.complete) {
       const missing = state.readiness.missing.map(item => item.code).join(', ');
@@ -679,14 +728,15 @@ r.post('/:id/tare/start', async (req: any, res, next) => {
     if (test?.status === 'REVALIDATION_REQUIRED' || state.stale) return res.status(409).json({ message: 'The A.4.2 source evidence or tare configuration changed. Revalidate A.4.6 before continuing.', code: 'REVALIDATION_REQUIRED' });
     if (!test) {
       const instrument: any = report.instrument || {}; const config: any = instrument.maximumTareEffect; const instrumentUnit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
-      const requestBody = req.body ?? {};
       const maxTare = convertMass(Number(config.value), config.unit, instrumentUnit); const requestedTare = requestBody.representativeTare === undefined ? undefined : convertMass(Number(requestBody.representativeTare), String(requestBody.representativeTareUnit || instrumentUnit) as MassUnit, instrumentUnit);
       const plan = generateTareLoadPlan(Number(instrument.min), Number(instrument.max), Number(instrument.e), String(instrument.accuracyClass), instrument.tareType, maxTare, requestedTare); if (!plan.supported) return res.status(409).json({ message: plan.reason, code: 'CONFIGURATION_REQUIRED' });
       const a461IsApplicable = (state.applicability.phases || []).some((phase: any) => phase.code === 'A.4.6.1' && phase.status === 'APPLICABLE');
       const phases = (state.applicability.phases || []).map((phase: any, index: number, all: any[]) => ({ ...phase, applicability: phase.status, status: phase.status === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : phase.code === 'A.4.6.2' && a461IsApplicable ? 'LOCKED' : index === all.findIndex(item => item.status === 'APPLICABLE') ? 'AVAILABLE' : 'LOCKED', observations: [] }));
       const tareConfig = { tareDevicePresent: instrument.tareDevicePresent, tareType: instrument.tareType, maximumTareEffect: { value: maxTare, unit: instrumentUnit }, tareOperationMode: instrument.tareOperationMode, tareWeighingDevicePresent: instrument.tareWeighingDevicePresent, presetTareDevicePresent: instrument.presetTareDevicePresent };
       test = new TareTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: 'R76-A4.6-1.0', ruleSetId: 'oiml-r76-annex-a-v1', source: 'OIML R 76-1:2006 Annex A A.4.6', status: 'IN_PROGRESS', result: 'NOT_DETERMINED', sourceFingerprint: state.fingerprint, instrumentSnapshot: { accuracyClass: instrument.accuracyClass, unit: instrumentUnit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, zeroSettingMethod: instrument.zeroSettingMethod, zeroTracking: instrument.zeroTracking }, tareConfigurationSnapshot: tareConfig, loadPlan: plan.loads, phases, startedAt: new Date(), events: [] });
-      tareEvent(test, 'TARE_TEST_STARTED', req.user, { ruleSetId: 'R76-A4.6-1.0' }); await test.save();
+      tareEvent(test, 'TARE_TEST_STARTED', req.user, { ruleSetId: 'R76-A4.6-1.0' });
+      if (suppliedConfiguration !== undefined) await report.save();
+      await test.save();
     }
     await setReportExecutionState(report); res.status(201).json({ report, applicability: state.applicability, test: publicTare(test, report.instrument) });
   } catch (e) { next(e); }
@@ -1047,17 +1097,40 @@ const eccentricityStartInput = z.object({
   testLoad: z.number().finite().nonnegative(),
   testLoadUnit: z.enum(['mg', 'g', 'kg', 't']),
 });
+const eccentricityReportConfigurationInput = z.object({
+  loadReceptorType: z.enum(['normal platform', 'other / special configuration']).optional(),
+  numberOfSupportPoints: z.number().int().positive().optional(),
+  mobileInstrument: z.boolean().optional(),
+  rollingLoad: z.boolean().optional(),
+});
 
 r.post('/:id/eccentricity/start', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
-    const state = await eccentricityState(report);
+    const data = eccentricityStartInput.parse(req.body);
+    let state = await eccentricityState(report);
+    const suppliedConfiguration = req.body?.reportConfiguration;
+    if (suppliedConfiguration !== undefined) {
+      if (state.test || report.status !== 'TESTING') return res.status(409).json({ message: 'A.4.7 configuration can only be supplied before the test starts on an actively testing report.', code: state.test ? 'ECCENTRICITY_TEST_ALREADY_STARTED' : 'REPORT_LOCKED' });
+      const configuration = eccentricityReportConfigurationInput.parse(suppliedConfiguration);
+      const currentInstrument = report.instrument?.toObject ? report.instrument.toObject() : { ...(report.instrument || {}) };
+      let nextInstrument: Record<string, any>;
+      try { nextInstrument = applyMissingEccentricityReportConfiguration(currentInstrument, configuration); }
+      catch (error: any) { return res.status(400).json({ message: error.message, code: 'REPORT_CONFIGURATION_CONFLICT' }); }
+      report.instrument = nextInstrument as any;
+      report.markModified('instrument');
+      state = await eccentricityState(report);
+      if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'Complete the missing A.4.7 report configuration.', code: 'CONFIGURATION_REQUIRED', applicability: state.applicability });
+      if (state.applicability.executionSupported !== true || state.applicability.method !== 'A.4.7.1') {
+        await report.save();
+        return res.json({ report: report.toObject(), applicability: state.applicability, test: null, started: false, message: state.applicability.reason });
+      }
+    }
     if (!state.applicability || state.applicability.status !== 'APPLICABLE') return res.status(409).json({ message: state.applicability?.reason || 'A.4.7 requires instrument configuration.', code: 'CONFIGURATION_REQUIRED' });
     if (state.applicability.executionSupported !== true || state.applicability.method !== 'A.4.7.1') return res.status(409).json({ message: 'The applicable A.4.7 method is identified, but its execution module is not implemented for this configuration.', code: 'PROCEDURE_MODULE_REQUIRED' });
     if (state.stale) return res.status(409).json({ message: 'The instrument configuration changed. Revalidate the Eccentricity test before continuing.', code: 'REVALIDATION_REQUIRED' });
     let test: any = state.test;
     if (!test) {
-      const data = eccentricityStartInput.parse(req.body);
       const instrument: any = report.instrument || {};
       const instrumentUnit: MassUnit = isMassUnit(instrument.unit) ? instrument.unit : 'g';
       const actualTestLoad = convertMass(data.testLoad, data.testLoadUnit, instrumentUnit);
@@ -1066,6 +1139,7 @@ r.post('/:id/eccentricity/start', async (req: any, res, next) => {
       const positions = eccentricityPositions(state.applicability.method, Number(instrument.numberOfSupportPoints));
       test = new EccentricityTest({ reportId: report._id, testerId: req.user._id, testerNameSnapshot: userName(req.user), testerRole: req.user.role, testVersion: ECCENTRICITY_TEST_VERSION, engineVersion: state.route.engineVersion, ruleSetId: state.route.ruleSetId, source: ECCENTRICITY_SOURCE, method: state.applicability.method, methodLabel: state.applicability.methodLabel, executionSupported: true, supportPointCount: instrument.numberOfSupportPoints, positionCount: positions.length, status: 'IN_PROGRESS', result: 'NOT_DETERMINED', instrumentSnapshot: { accuracyClass: instrument.accuracyClass, indicationType: instrument.indicationType, unit: instrumentUnit, min: instrument.min, max: instrument.max, e: instrument.e, d: instrument.d, loadReceptorType: instrument.loadReceptorType, numberOfSupportPoints: instrument.numberOfSupportPoints, mobileInstrument: instrument.mobileInstrument, rollingLoad: instrument.rollingLoad }, sourceFingerprint: state.fingerprint, zeroConditionConfirmed: true, testLoad: { value: actualTestLoad, unit: instrumentUnit }, sketch: { type: 'four-quarter-normal-platform', positionIds: positions.map(position => position.positionId), source: 'OIML R 76-1:2006 Annex A A.4.7.1' }, positions: positions.map((position, index) => ({ ...position, status: index === 0 ? 'AVAILABLE' : 'LOCKED', result: 'NOT_DETERMINED', observations: [] })), startedAt: new Date(), events: [] });
       eccentricityEvent(test, 'ECCENTRICITY_TEST_STARTED', req.user, { method: state.applicability.method, zeroTrackingDisabled: true, testLoad: { value: data.testLoad, unit: data.testLoadUnit } });
+      if (suppliedConfiguration !== undefined) await report.save();
       await test.save(); await setReportExecutionState(report);
     }
     res.status(201).json({ report, applicability: state.applicability, test: publicEccentricity(test) });
@@ -1795,7 +1869,31 @@ const influenceFactorsState = async (report: any) => {
   const applicability: any = route.tests.find(test => test.code === 'A.5');
   const test: any = await InfluenceFactorsTest.findOne({ reportId: report._id });
   const fingerprint = influenceFactorsFingerprint(report.instrument || {});
-  const stale = !!test && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint;
+  const sameA5Profile = influenceFactorsSnapshotMatches(test?.instrumentSnapshot, report.instrument || {});
+  const stale = !!test && !!test.sourceFingerprint && test.sourceFingerprint !== fingerprint && !sameA5Profile;
+  // Older builds fingerprinted every report instrument field. A.4-only edits
+  // (such as tare configuration) could therefore mark A.5 stale even though
+  // its saved A.5 profile is identical. Reconcile only that provable case,
+  // retain all observations/phases, and preserve an audit trail.
+  if (test?.status === 'REVALIDATION_REQUIRED' && sameA5Profile && !stale) {
+    const applicablePhases = (test.phases || []).filter((phase: any) => phase.applicability === 'APPLICABLE');
+    const allPhasesComplete = applicablePhases.length > 0 && applicablePhases.every((phase: any) => phase.status === 'COMPLETED' && ['PASS', 'FAIL'].includes(String(phase.result)));
+    const previous = { status: test.status, result: test.result, sourceFingerprint: test.sourceFingerprint };
+    test.sourceFingerprint = fingerprint;
+    test.status = allPhasesComplete ? 'COMPLETED' : 'IN_PROGRESS';
+    test.result = allPhasesComplete ? (applicablePhases.some((phase: any) => phase.result === 'FAIL') ? 'FAIL' : 'PASS') : 'NOT_DETERMINED';
+    if (!allPhasesComplete) test.completedAt = undefined;
+    test.revisionHistory = [...(test.revisionHistory || []), {
+      changedAt: new Date(),
+      reason: 'Revalidated the legacy A.5 source signature: the A.5-relevant report configuration matches its saved snapshot; only unrelated report fields had changed. Saved A.5 observations and phases were preserved.',
+      previous,
+      currentSourceFingerprint: fingerprint,
+    }];
+    test.events.push({ action: 'INFLUENCE_FACTORS_REVALIDATED', testerId: test.testerId, testerNameSnapshot: test.testerNameSnapshot, timestamp: new Date(), metadata: { reason: 'A.5 profile unchanged; unrelated report configuration excluded from its source fingerprint.' } });
+    test.markModified('revisionHistory');
+    test.markModified('events');
+    await test.save();
+  }
   if (stale && test.status !== 'REVALIDATION_REQUIRED' && report.status !== 'COMPLETED') {
     test.status = 'REVALIDATION_REQUIRED'; test.result = 'REVALIDATION_REQUIRED'; test.completedAt = undefined;
     test.events.push({ action: 'INFLUENCE_FACTORS_REVALIDATION_REQUIRED', testerId: test.testerId, testerNameSnapshot: test.testerNameSnapshot, timestamp: new Date(), metadata: { previousFingerprint: test.sourceFingerprint, currentFingerprint: fingerprint } });
@@ -1822,8 +1920,8 @@ const influenceFactorsPrerequisitesComplete = async (report: any, route: any) =>
     'A.4.12': { status: stability.test?.status, result: stability.test?.result, stale: stability.stale },
     'A.5': { status: influence.test?.status, result: influence.test?.result, stale: influence.stale },
   };
-  const required = route.tests.filter((item: any) => (item.route === 'A.4' || item.code.startsWith('A.4.')) && item.status !== 'NOT_APPLICABLE');
-  return required.every((item: any) => item.status === 'APPLICABLE' && item.executionSupported !== false && isTestExecutionTerminal(executions[item.code]));
+  const required = route.tests.filter((item: any) => (item.route === 'A.4' || item.code.startsWith('A.4.')) && isRequiredExecutableTest(item));
+  return required.length > 0 && required.every((item: any) => isTestExecutionTerminal(executions[item.code]));
 };
 
 const activateNextInfluencePhase = (test: any) => {
@@ -1992,6 +2090,8 @@ r.patch('/:id/influence-factors/voltage', async (req: any, res, next) => {
       })).length(8),
       notes: z.string().optional().default(''),
     }).parse(req.body);
+    const readings = validateVoltageObservationReadings(body.observations);
+    if (!readings.valid) return res.status(400).json({ message: readings.message, code: 'VOLTAGE_OBSERVATIONS_INCOMPLETE' });
     const snapshot: any = test.instrumentSnapshot;
     const unit: MassUnit = isMassUnit(snapshot.unit) ? snapshot.unit : 'g';
     const coverage = validateVoltageObservationCoverage(body.observations.map(item => ({
@@ -2728,8 +2828,8 @@ const applicableTestCompletion = async (report: any, user?: any) => {
   const executionByCode: Record<string, ExecutionState | undefined> = {
     'A.4.2': executionStates['A.4.2'], 'A.4.3': executionStates['A.4.3'], 'A.4.4': executionStates['A.4.4'], 'A.4.5': executionStates['A.4.5'], 'A.4.6': executionStates['A.4.6'], 'A.4.7': executionStates['A.4.7'], 'A.4.8': executionStates['A.4.8'], 'A.4.9': executionStates['A.4.9'], 'A.4.10': executionStates['A.4.10'], 'A.4.11': executionStates['A.4.11'], 'A.4.12': executionStates['A.4.12'], 'A.5': executionStates['A.5'], 'A.6': executionStates['A.6'],
   };
-  const pendingTests = routeTests.filter(test => test.status === 'APPLICABLE' && !isTestExecutionTerminal(executionByCode[test.code]));
-  const attentionTests = routeTests.filter(test => ['REQUIRES_CONFIGURATION', 'REQUIRES_CONTEXT', 'UNSUPPORTED', 'DEFERRED'].includes(test.status) || availability[test.code]?.state === 'REVALIDATION_REQUIRED');
+  const pendingTests = routeTests.filter(test => isRequiredExecutableTest(test) && !isTestExecutionTerminal(executionByCode[test.code]));
+  const attentionTests = routeTests.filter(test => isSubmissionAttentionTest(test, availability[test.code]?.state));
   return { performance, zeroChecking, zeroSettingBeforeLoading, tare, eccentricity, multipleIndicating: multipleFreshness.test || multipleIndicating, discrimination, sensitivity, repeatability, variationWithTime, stabilityOfEquilibrium, influenceFactors, endurance, influenceFactorsStale, enduranceStale, route, availability, pendingTests, attentionTests };
 };
 
@@ -2738,7 +2838,7 @@ r.get('/:id/test-conditions', async (req: any, res, next) => {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
     const state = await applicableTestCompletion(report);
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;
-    res.json({ report: value, available: state.pendingTests.length === 0 && state.attentionTests.length === 0, pendingTests: state.pendingTests, attentionTests: state.attentionTests, performance: state.performance ? publicPerformance(state.performance) : null, zeroSettingBeforeLoading: state.zeroSettingBeforeLoading ? publicZeroSetting(state.zeroSettingBeforeLoading) : null, sensitivity: state.sensitivity ? publicSensitivity(state.sensitivity) : null, repeatability: state.repeatability ? publicRepeatability(state.repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null });
+    res.json({ report: value, prototype: isSyntheticPrototypeReport(report, state.endurance), available: state.pendingTests.length === 0 && state.attentionTests.length === 0, pendingTests: state.pendingTests, attentionTests: state.attentionTests, performance: state.performance ? publicPerformance(state.performance) : null, zeroSettingBeforeLoading: state.zeroSettingBeforeLoading ? publicZeroSetting(state.zeroSettingBeforeLoading) : null, sensitivity: state.sensitivity ? publicSensitivity(state.sensitivity) : null, repeatability: state.repeatability ? publicRepeatability(state.repeatability) : null, variationWithTime: state.variationWithTime ? publicVariationWithTime(state.variationWithTime) : null, stabilityOfEquilibrium: state.stabilityOfEquilibrium ? publicStability(state.stabilityOfEquilibrium) : null, influenceFactors: state.influenceFactors ? publicInfluenceFactors(state.influenceFactors) : null });
   } catch (e) { next(e); }
 });
 
@@ -2755,21 +2855,13 @@ r.patch('/:id/test-conditions', async (req: any, res, next) => {
     const laboratory: any = (report.laboratory as any)?.toObject?.() || report.laboratory || {};
     report.laboratory = { ...laboratory, testEndDate: data.testEndDate };
     report.environment = { ...environment, temperatureEnd: data.temperatureEnd, relativeHumidityEnd: data.relativeHumidityEnd, barometricPressureEnd: data.barometricPressureEnd };
+    report.testConditionsMode = 'OBSERVED';
     if (data.notes.trim()) (report.environment as any).notes = data.notes.trim();
     await report.save();
     const value: any = report.toObject(); delete value._id; delete value.submittedBy;
     res.json({ report: value });
   } catch (e) { next(e); }
 });
-
-const reviewReadiness = (report: any, performance: any, pendingTests: any[] = [], attentionTests: any[] = []) => {
-  if (!performance || performance.status !== 'COMPLETED') return 'Complete A.4.4 Weighing Performance before opening the final report preview.';
-  if (pendingTests.length) return `Complete all applicable tests before final review. ${pendingTests.length} applicable test(s) remain.`;
-  if (attentionTests.length) return `${attentionTests[0].code} requires attention before final review: ${attentionTests[0].reason || 'complete its configuration or execution.'}`;
-  const environment = report.environment || {};
-  if (!report.laboratory?.testEndDate || !finite(environment.temperatureEnd) || !finite(environment.relativeHumidityEnd) || !finite(environment.barometricPressureEnd)) return 'Complete Test Conditions with the session end time, temperature, humidity, and barometric pressure before final review.';
-  return null;
-};
 
 r.get('/:id/review', async (req: any, res, next) => {
   try {
@@ -2796,7 +2888,7 @@ r.get('/:id/review', async (req: any, res, next) => {
     const retestRequest: any = await RetestRequest.findOne({ reportId: report._id, status: { $in: ['OPEN', 'SUBMITTED'] } }).sort({ requestedAt: -1 }).lean();
     const retestModel = retestRequest ? retestModels[retestRequest.testCode] : undefined;
     const retestCurrentTest = retestRequest && retestModel ? await retestModel.findOne({ reportId: report._id }).lean() : null;
-    const readinessError = reviewReadiness(report, performance, state.pendingTests, attentionTests);
+    const readinessError = reportSubmissionReadiness(report, performance, state.pendingTests, attentionTests);
     const overallResult = deriveOverallResult(state.route, {
       'A.4.2': state.zeroChecking,
       'A.4.3': state.zeroSettingBeforeLoading,
@@ -2816,6 +2908,28 @@ r.get('/:id/review', async (req: any, res, next) => {
   } catch (e) { next(e); }
 });
 
+r.post('/:id/test-conditions/synthetic-demo', async (req: any, res, next) => {
+  try {
+    const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
+    const state = await applicableTestCompletion(report);
+    const prototype = isSyntheticPrototypeReport(report, state.endurance);
+    if (!canUseSyntheticDemoConditions(req.user, prototype)) return res.status(403).json({ message: 'Synthetic test conditions are available only for an explicitly synthetic report in the demo tester workspace.', code: 'DEMO_SYNTHETIC_CONDITIONS_ONLY' });
+    if (report.laboratory?.testEndDate || report.testConditionsMode) return res.status(409).json({ message: 'Session end conditions are already recorded. Update them through the normal observed-conditions form.', code: 'TEST_CONDITIONS_ALREADY_RECORDED' });
+    if (state.pendingTests.length || state.attentionTests.length) return res.status(409).json({ message: 'Complete all required tests and resolve execution attention before recording session end conditions.', pendingTests: state.pendingTests, attentionTests: state.attentionTests });
+    const profile = syntheticDemoConditionProfile(report);
+    if (!profile) return res.status(409).json({ message: 'The synthetic demo profile requires recorded start time, temperature, humidity, and barometric pressure. No end values were changed.', code: 'DEMO_PROFILE_SOURCE_INCOMPLETE' });
+    const laboratory: any = (report.laboratory as any)?.toObject?.() || report.laboratory || {};
+    const environment: any = (report.environment as any)?.toObject?.() || report.environment || {};
+    report.laboratory = { ...laboratory, testEndDate: profile.testEndDate };
+    report.environment = { ...environment, ...profile.environment };
+    report.testConditionsMode = profile.testConditionsMode;
+    auditReport(report, 'SYNTHETIC_DEMO_TEST_CONDITIONS_APPLIED', req.user, { profileId: profile.profileId, source: 'Recorded start conditions; no physical end readings captured.' });
+    await report.save();
+    const value: any = report.toObject(); delete value._id; delete value.submittedBy;
+    res.json({ report: value, prototype: true, profileId: profile.profileId, message: 'Explicitly synthetic demo test conditions recorded from the saved start-condition profile.' });
+  } catch (e) { next(e); }
+});
+
 r.post('/:id/review/submit', async (req: any, res, next) => {
   try {
     const report = await getOwnedReport(req); if (!report) return res.status(404).json({ message: 'Test report not found.' });
@@ -2825,7 +2939,7 @@ r.post('/:id/review/submit', async (req: any, res, next) => {
     const prototype = isSyntheticPrototypeReport(report, endurance);
     if (prototype) state.pendingTests = state.pendingTests.filter((test: any) => test.code !== 'A.6');
     const attentionTests = state.attentionTests;
-    const readinessError = reviewReadiness(report, performance, state.pendingTests, attentionTests); if (readinessError) return res.status(409).json({ message: readinessError });
+    const readinessError = reportSubmissionReadiness(report, performance, state.pendingTests, attentionTests); if (readinessError) return res.status(409).json({ message: readinessError });
     const requiredTests = requiredEvidenceTestIds();
     if (requiredTests.length) {
       const evidence = await Evidence.find({ reportId: report._id, testId: { $in: requiredTests }, status: 'ACTIVE' }).select('testId').lean();

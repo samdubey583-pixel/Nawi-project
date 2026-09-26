@@ -24,7 +24,7 @@ test('report PDF builds a structured multi-page draft with real result, observat
       applicant: { name: 'Sample Applicant', email: 'applicant@example.test' },
       manufacturer: { name: 'Sample Manufacturer', address: 'Test address' },
       instrument: { typeDesignation: 'QA-1', serialNumber: 'QA-SERIAL-1', accuracyClass: 'Class II', indicationType: 'Self-indicating', unit: 'kg', min: .2, max: 80, e: .01, d: .005, n: 8000, powerSourceType: 'AC_MAINS', nominalVoltage: 230 },
-      laboratory: { name: 'Sample Lab', testerName: 'Tester One', testStartDate: '2026-09-21' },
+      laboratory: { name: 'Sample Lab', testerName: 'Tester One', testStartDate: '2026-09-21' }, testConditionsMode: 'SYNTHETIC_DEMO',
       environment: { temperatureStart: 20, temperatureEnd: 21, relativeHumidityStart: 50, relativeHumidityEnd: 50, barometricPressureStart: 1008, barometricPressureEnd: 1009 },
       testerNameSnapshot: 'Tester One', submittedForReviewAt: new Date('2026-09-21T10:00:00Z'), auditHistory: [],
     },
@@ -52,6 +52,10 @@ test('report PDF builds a structured multi-page draft with real result, observat
   assert.equal(pdf.toString('latin1').match(/\/Type\s*\/Page\b/g)?.length, pages, 'page furniture must not create uncounted overflow pages');
   assert.match(pdf.toString('latin1'), /\/Subtype\s*\/Image/);
   assert.match(pdf.toString('latin1'), /startxref/);
+  const normalizedText = readablePdfStreams(pdf).replace(/\s+/g, '').toLowerCase();
+  assert.ok(normalizedText.includes('syntheticdemoprofile'));
+  assert.ok(normalizedText.includes('nophysical'));
+  assert.ok(normalizedText.includes('endreadingscaptured'));
 });
 
 test('final report PDF uses the same generator and labels the document final', async () => {
@@ -160,6 +164,12 @@ test('technical PDF preserves authoritative tare, discrimination, and variation 
   assert.match(tare.summary.text, /Authoritative persisted result: PASS/);
   assert.match(tare.summary.text, /5 of 5 required repetitions recorded/);
   assert.doesNotMatch(tare.rows.map((row: Record<string, unknown>) => Object.values(row).join(' ')).join(' '), /Not recorded/);
+  const tarePdfText = readablePdfStreams(pdf);
+  const compactTarePdfText = tarePdfText.replace(/\s+/g, '');
+  assert.ok(compactTarePdfText.includes('A.4.6-TARE'));
+  assert.ok(compactTarePdfText.includes('TESTRESULT:PASS'));
+  assert.ok(compactTarePdfText.includes('Authoritativepersistedresult:PASS'));
+  assert.ok(compactTarePdfText.includes('100g'));
   const discrimination = discriminationPdfRows([
     { stageId: 'MIN', label: 'REFERENCE_START', targetLoad: { value: 100, unit: 'g' }, observation: {
       unit: 'g', startingIndication: 100, lowerIndication: 100, actualLowerDifference: 0, upperIndication: 100.5,
@@ -190,6 +200,24 @@ test('technical PDF preserves authoritative tare, discrimination, and variation 
   assert.match(generatedTextSource, /\/Subtype\s*\/Image/);
   const pages = Number(pdf.toString('latin1').match(/\/Count\s+(\d+)/)?.[1]);
   assert.equal(generatedTextSource.match(/\/Type\s*\/Page\b/g)?.length, pages);
+});
+
+test('technical PDF humanizes internal position identifiers in observation context', async () => {
+  const pdf = await buildDraftReportPdf({
+    report: { testReportId: 'TR-PDF-LABELS-001', status: 'AWAITING_REVIEW', auditHistory: [] },
+    applicability: { tests: [{ code: 'A.4.7', name: 'Eccentricity', order: 1, status: 'APPLICABLE' }] },
+    records: {
+      'A.4.7': {
+        status: 'COMPLETED', result: 'PASS', positions: [{
+          positionId: 'POSITION_1', label: 'Quarter 1 - POSITION_1', status: 'COMPLETED', result: 'PASS',
+          observations: [{ loadL: 100, indicationI: 100, deltaL: 5, correctedErrorEc: 0, result: 'PASS' }],
+        }],
+      },
+    },
+    overallResult: 'PASS', documentStatus: 'DRAFT', generatedAt: new Date('2026-09-24T10:00:00Z'),
+  });
+  const text = readablePdfStreams(pdf);
+  assert.doesNotMatch(text, /POSITION_1/);
 });
 
 test('influence-factor PDF preserves warm-up, all temperature points, human voltage labels, and endurance checkpoint loads', async () => {

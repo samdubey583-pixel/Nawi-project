@@ -195,8 +195,13 @@ test('derives the supported four-quarter A.4.7.1 method from the instrument prof
   assert.deepEqual(result.positions?.map(position => position.label), ['Quarter 1', 'Quarter 2', 'Quarter 3', 'Quarter 4']);
 });
 
-test('uses A.4.7.1 for one to four supports and A.4.7.2 for more than four', () => {
-  for (const numberOfSupportPoints of [1, 3, 4]) assert.equal(resultFor(baseProfile({ numberOfSupportPoints }), 'A.4.7').method, 'A.4.7.1');
+test('uses supported A.4.7.1 for one to four supports and A.4.7.2 for more than four', () => {
+  for (const numberOfSupportPoints of [1, 3, 4]) {
+    const result = resultFor(baseProfile({ numberOfSupportPoints }), 'A.4.7');
+    assert.equal(result.method, 'A.4.7.1');
+    assert.equal(result.executionSupported, true);
+    assert.equal(result.positions?.length, 4);
+  }
   for (const numberOfSupportPoints of [5, 10]) {
     const result = resultFor(baseProfile({ numberOfSupportPoints }), 'A.4.7');
     assert.equal(result.method, 'A.4.7.2');

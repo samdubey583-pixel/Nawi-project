@@ -161,6 +161,24 @@ export function influenceFactorsPlan(snapshot: InfluenceFactorSnapshot) {
 export type VoltageLoadCondition = '10E' | 'HALF_MAX_TO_MAX';
 export const VOLTAGE_SEQUENCE_LABELS = ['REFERENCE_START', 'LOWER', 'UPPER', 'REFERENCE_END'] as const;
 
+export function validateVoltageObservationReadings(observations: Array<{
+  label: string;
+  loadCondition: VoltageLoadCondition;
+  functionBehavior: 'OPERATED' | 'SWITCHED_OFF';
+  indication?: number;
+  deltaL?: number;
+  zeroError?: number;
+}>) {
+  const incomplete = observations.find(item => item.functionBehavior === 'OPERATED' &&
+    (!finite(item.indication) || !finite(item.deltaL) || !finite(item.zeroError)));
+  if (incomplete) {
+    const load = incomplete.loadCondition === '10E' ? '10e' : '½ Max to Max';
+    const point = incomplete.label.replace(/_/g, ' ').toLowerCase();
+    return { valid: false as const, message: `${load} · ${point} requires an indication, ΔL, and E₀ when the instrument operates as designed.` };
+  }
+  return { valid: true as const };
+}
+
 export function validateVoltageObservationCoverage(
   observations: Array<{ label: string; loadCondition: VoltageLoadCondition; load: number }>,
   snapshot: { max: number; e: number },
@@ -229,8 +247,28 @@ export function recalculateSavedTiltingObservation(snapshot: InfluenceFactorSnap
 }
 
 export function influenceFactorsFingerprint(snapshot: InfluenceFactorSnapshot) {
-  const normalized = { ...snapshot } as Record<string, unknown>;
+  // Fingerprint only the profile consumed by A.5. The report snapshot also
+  // contains fields for unrelated routes (for example A.4.6 tare setup), and
+  // changing those must not invalidate a saved A.5 execution.
+  const keys: Array<keyof InfluenceFactorSnapshot> = [
+    'accuracyClass', 'indicationType', 'unit', 'min', 'max', 'e', 'd',
+    'usesElectricPower', 'powerSupplyType', 'powerSourceType', 'nominalVoltage',
+    'minimumOperatingVoltage', 'maximumVoltage', 'specifiedVoltageRange',
+    'threePhaseSupply', 'rechargeableBattery', 'rechargeableBatteryCanChargeDuringOperation',
+    'hasLevelIndicator', 'hasAutomaticTiltSensor', 'manufacturerTiltLimit',
+    'tiltConfiguration', 'mobileInstrument', 'mobileOutdoorUse',
+    'portableRoadVehicleInstrument', 'specifiedMinimumTemperature',
+    'specifiedMaximumTemperature', 'manufacturerReferenceTemperature',
+    'rangeType', 'intervalType',
+  ];
+  const normalized = Object.fromEntries(keys
+    .filter(key => snapshot[key] !== undefined)
+    .map(key => [key, snapshot[key]])) as Record<string, unknown>;
   const range = normalized.specifiedVoltageRange as { min?: unknown; max?: unknown } | undefined;
   if (!range || (range.min === undefined && range.max === undefined)) delete normalized.specifiedVoltageRange;
   return JSON.stringify(normalized);
+}
+
+export function influenceFactorsSnapshotMatches(testSnapshot: InfluenceFactorSnapshot | undefined, currentSnapshot: InfluenceFactorSnapshot) {
+  return !!testSnapshot && influenceFactorsFingerprint(testSnapshot) === influenceFactorsFingerprint(currentSnapshot);
 }

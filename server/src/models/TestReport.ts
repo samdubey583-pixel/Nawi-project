@@ -27,6 +27,7 @@ const testReportSchema = new Schema({
     barometricPressure: Number, barometricPressureStart: Number, barometricPressureMaximum: Number, barometricPressureEnd: Number,
     notes: String,
   },
+  testConditionsMode: { type: String, enum: ['OBSERVED', 'SYNTHETIC_DEMO'] },
   powerSupply: { source: { type: String, default: '' }, voltage: Number, frequency: Number, notes: String },
   instrumentSetup: { notes: String, instrumentLevelled: String, zeroSetting: String, preloadingPerformed: String, recoveryAllowed: String, smallerThanEIndicationDeviceUsed: String, simulatorUsed: String, adjustmentPerformed: String },
   testPreparation: { notes: String },

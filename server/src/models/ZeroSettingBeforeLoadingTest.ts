@@ -19,6 +19,10 @@ const zeroSettingBeforeLoadingSchema = new Schema({
   sourceEvidence: { type: Schema.Types.Mixed },
   procedureObservations: { type: Schema.Types.Mixed },
   executionMode: { type: String, enum: ['PHYSICAL', 'SYNTHETIC_SIMULATION'], default: 'PHYSICAL' },
+  modeConfirmations: {
+    physical: { type: Boolean, default: false },
+    syntheticSimulation: { type: Boolean, default: false },
+  },
   operatorNotes: { type: String, default: '' },
   revalidationHistory: { type: [Schema.Types.Mixed], default: [] },
   startedAt: Date,

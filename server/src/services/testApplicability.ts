@@ -276,7 +276,10 @@ function eccentricityEvaluation(profile: InstrumentProfile, reason: string): { s
   }
   if (method === 'A.4.7.3' && (!Number.isInteger(profile.numberOfSupportPoints) || Number(profile.numberOfSupportPoints) <= 0)) return { status: 'REQUIRES_CONFIGURATION', reason: 'A positive number of support points is required for the selected special load receptor method.' };
   const positions = eccentricityPositions(method, profile.numberOfSupportPoints);
-  const supported = method === 'A.4.7.1' && profile.numberOfSupportPoints === 4;
+  // A.4.7.1 is the existing four-quarter execution for normal platforms with
+  // up to four supports. Mobile platforms reach this branch only through the
+  // existing four-support A.4.7.5 applicability rule above.
+  const supported = method === 'A.4.7.1';
   const executionReason = supported ? `${reason}${mobileClauseReason}` : `${reason} The ${method} execution module is not implemented for this configuration.`;
   return { status: 'APPLICABLE', reason: executionReason, method, methodLabel, executionSupported: supported, supportPointCount: profile.numberOfSupportPoints, positionCount: positions.length || undefined, positions: positions.length ? positions : undefined };
 }

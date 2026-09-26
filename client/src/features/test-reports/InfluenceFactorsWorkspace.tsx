@@ -81,7 +81,42 @@ export default function InfluenceFactorsWorkspace() {
 function PhaseCard({ phase, index, active, snapshot, test, reportId, reload, setError, busy, setBusy, synthetic, onRecalculate }: any) {
   const disabled = !active || phase.status === 'LOCKED';
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setBusy(true); setError(''); const body = Object.fromEntries(new FormData(event.currentTarget));
+    event.preventDefault(); setError(''); const body = Object.fromEntries(new FormData(event.currentTarget));
+    if (phase.code === 'A.5.4') {
+      const points = voltageObservationPoints(test.plan, snapshot);
+      for (const point of points) {
+        const actualVoltage = Number(body[`${point.id}_actual`]);
+        const load = Number(body[`${point.id}_load`]);
+        const behavior = body[`${point.id}_behavior`];
+        const pointName = `${point.loadConditionLabel} · ${point.label.toLowerCase().replace(/_/g, ' ')}`;
+        if (!Number.isFinite(actualVoltage) || actualVoltage <= 0) {
+          setError(`${pointName}: enter an actual voltage greater than zero.`);
+          return;
+        }
+        if (!Number.isFinite(load) || load < 0) {
+          setError(`${pointName}: enter a valid actual load.`);
+          return;
+        }
+        if (behavior === 'OPERATED') {
+          const indication = num(body[`${point.id}_indication`]);
+          const deltaL = num(body[`${point.id}_deltaL`]);
+          const zeroError = num(body[`${point.id}_zeroError`]);
+          if (indication === undefined || !Number.isFinite(indication)) {
+            setError(`${pointName}: enter an indication when the instrument operated as designed.`);
+            return;
+          }
+          if (deltaL === undefined || !Number.isFinite(deltaL) || deltaL < 0) {
+            setError(`${pointName}: enter a valid ΔL (zero or greater) when the instrument operated as designed.`);
+            return;
+          }
+          if (zeroError === undefined || !Number.isFinite(zeroError)) {
+            setError(`${pointName}: enter E₀ when the instrument operated as designed.`);
+            return;
+          }
+        }
+      }
+    }
+    setBusy(true);
     try {
       if (phase.code === 'A.5.1') {
         const observations = ['LONGITUDINAL', 'TRANSVERSE'].flatMap(direction => ['NO_LOAD', 'LOW_LOAD', 'MAX_LOAD'].map(position => ({ direction, position, requiredTilt: num(body[`${direction}_${position}_requiredTilt`]), actualTilt: Number(body[`${direction}_${position}_actualTilt`]), load: Number(body[`${direction}_${position}_load`]), indication: Number(body[`${direction}_${position}_indication`]), deltaL: Number(body[`${direction}_${position}_deltaL`]), zeroError: Number(body[`${direction}_${position}_zeroError`]), unit: snapshot.unit || 'g' })));
@@ -99,10 +134,10 @@ function PhaseCard({ phase, index, active, snapshot, test, reportId, reload, set
         await axios.patch(API(reportId, '/voltage'), { observations });
       }
       await reload();
-    } catch (e: any) { setError(e.response?.data?.message || `Unable to save ${phase.code}.`); } finally { setBusy(false); }
+    } catch (e: any) { setError(e.response?.data?.message || e.message || `Unable to save ${phase.code}.`); } finally { setBusy(false); }
   };
   if (phase.applicability === 'NOT_APPLICABLE') return <article className="influence-phase not-applicable"><div className="phase-index">{index + 1}</div><div><h3>{phase.code} · {phase.name}</h3><p>{phase.reason}</p></div><span>NOT APPLICABLE</span></article>;
-  return <article className={`influence-phase ${active ? 'active' : ''} ${phase.status === 'COMPLETED' ? 'completed' : ''}`}><div className="phase-index">{phase.status === 'COMPLETED' ? <Check size={17} /> : disabled ? <Lock size={15} /> : index + 1}</div><div className="phase-body"><div className="phase-title"><div><h3>{phase.code} · {phase.name}</h3><p>{phase.reason}</p></div><span>{phase.status.replace(/_/g, ' ')}</span></div>{phase.status === 'COMPLETED' ? phase.code === 'A.5.1' ? <><TiltingSavedSummary test={test} snapshot={snapshot} result={phase.result} />{synthetic && phase.result === 'FAIL' && <div className="influence-recalculate-note"><p>Re-evaluate this saved synthetic result using the corrected floating-point boundary handling. Original entered observations are retained in revision history.</p><button className="influence-primary" disabled={busy} onClick={() => void onRecalculate()}>Recalculate saved synthetic readings</button></div>}</> : phase.code === 'A.5.4' ? <VoltageSavedSummary test={test} snapshot={snapshot} result={phase.result} /> : <div className="influence-saved"><Check size={15} /> Recorded result: {phase.result}</div> : active && <form onSubmit={submit} className={`influence-form ${phase.code === 'A.5.1' ? 'tilt-form' : phase.code === 'A.5.4' ? 'voltage-form' : ''}`}>{phase.code === 'A.5.1' && <TiltingForm snapshot={snapshot} phase={phase} test={test} />}{phase.code === 'A.5.2' && <WarmupForm />}{phase.code === 'A.5.3' && <TemperatureForm plan={test.plan?.temperature} unit={snapshot.unit || 'g'} />}{phase.code === 'A.5.4' && <VoltageForm plan={test.plan} snapshot={snapshot} unit={snapshot.unit || 'g'} />}<button className="influence-primary" disabled={busy}><Save size={15} /> {phase.code === 'A.5.1' ? 'Save tilting observations' : 'Save observations'}</button></form>}</div></article>;
+  return <article className={`influence-phase ${active ? 'active' : ''} ${phase.status === 'COMPLETED' ? 'completed' : ''}`}><div className="phase-index">{phase.status === 'COMPLETED' ? <Check size={17} /> : disabled ? <Lock size={15} /> : index + 1}</div><div className="phase-body"><div className="phase-title"><div><h3>{phase.code} · {phase.name}</h3><p>{phase.reason}</p></div><span>{phase.status.replace(/_/g, ' ')}</span></div>{phase.status === 'COMPLETED' ? phase.code === 'A.5.1' ? <><TiltingSavedSummary test={test} snapshot={snapshot} result={phase.result} />{synthetic && phase.result === 'FAIL' && <div className="influence-recalculate-note"><p>Re-evaluate this saved synthetic result using the corrected floating-point boundary handling. Original entered observations are retained in revision history.</p><button className="influence-primary" disabled={busy} onClick={() => void onRecalculate()}>Recalculate saved synthetic readings</button></div>}</> : phase.code === 'A.5.4' ? <VoltageSavedSummary test={test} snapshot={snapshot} result={phase.result} /> : <div className="influence-saved"><Check size={15} /> Recorded result: {phase.result}</div> : active && <form noValidate={phase.code === 'A.5.4'} onSubmit={submit} className={`influence-form ${phase.code === 'A.5.1' ? 'tilt-form' : phase.code === 'A.5.4' ? 'voltage-form' : ''}`}>{phase.code === 'A.5.1' && <TiltingForm snapshot={snapshot} phase={phase} test={test} />}{phase.code === 'A.5.2' && <WarmupForm />}{phase.code === 'A.5.3' && <TemperatureForm plan={test.plan?.temperature} unit={snapshot.unit || 'g'} />}{phase.code === 'A.5.4' && <VoltageForm plan={test.plan} snapshot={snapshot} unit={snapshot.unit || 'g'} />}<button className="influence-primary" disabled={busy} aria-live="polite"><Save size={15} /> {busy ? 'Saving observations…' : phase.code === 'A.5.1' ? 'Save tilting observations' : 'Save observations'}</button></form>}</div></article>;
 }
 
 function tiltingMethod(snapshot: any, phase: any) {

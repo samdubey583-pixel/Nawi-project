@@ -127,6 +127,15 @@ function readableEnum(value: string) {
   return value.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, letter => letter.toUpperCase());
 }
 
+function readableEnumText(value: string) {
+  return value.replace(/\b[A-Z][A-Z0-9_]+\b/g, token => {
+    if (/^POSITION_\d+$/.test(token) || [
+      'REFERENCE_START', 'LOWER', 'UPPER', 'REFERENCE_END', 'SPECIFIED_HIGH', 'SPECIFIED_LOW',
+    ].includes(token)) return readableEnum(token);
+    return token;
+  });
+}
+
 function labelFor(key: string) {
   const labels: Record<string, string> = {
     e: 'Verification scale interval (e)', d: 'Scale interval (d)', n: 'Number of verification intervals (n)',
@@ -163,7 +172,7 @@ function valueText(value: unknown, key = '', parent?: Record<string, any>): stri
   if (value instanceof Date) return dateValue(value);
   if (typeof value === 'string') {
     if (/^(?:\d{4}-\d\d-\d\dT|\d{4}-\d\d-\d\d$)/.test(value) && /at|date|time|timestamp/i.test(key)) return dateValue(value);
-    return pdfSafeText(/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(value) ? readableEnum(value) : value);
+    return pdfSafeText(/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(value) ? readableEnum(value) : readableEnumText(value));
   }
   if (Array.isArray(value)) return value.map(item => valueText(item, key, parent)).join(', ');
   if (isObject(value)) return Object.entries(value).filter(([child]) => !SKIP_FIELDS.has(child)).map(([child, item]) => `${labelFor(child)}: ${valueText(item, child, value)}`).join('; ');
@@ -463,6 +472,7 @@ class ReportLayout {
     this.keyValueTable([
       ['Evaluation started', report.laboratory?.testStartDate || earliestStart(this.input.records)],
       ['Evaluation completed', report.laboratory?.testEndDate || latestCompletion(this.input.records)],
+      ['Test-condition source', report.testConditionsMode === 'SYNTHETIC_DEMO' ? 'SYNTHETIC DEMO PROFILE - end values copied from recorded start conditions; no physical end readings captured.' : report.testConditionsMode === 'OBSERVED' ? 'Observed session-end readings.' : undefined],
       ['Test setup notes', report.instrumentSetup?.notes], ['Preparation notes', report.testPreparation?.notes], ['Environmental notes', env.notes],
     ]);
 
@@ -731,12 +741,14 @@ class ReportLayout {
           const parents = child.filter(isObject);
           existing.push(...parents.map(item => {
             const label = [item.code, item.name, item.label, item.positionId, item.seriesId, item.repetition != null ? `Trial ${item.repetition}` : '']
+              .map(part => typeof part === 'string' ? readableEnumText(part) : part)
               .filter(Boolean).join(' - ');
             return { context: [label, context].filter(Boolean).join(' / '), item };
           }));
           groups.set(key, existing);
           for (const item of parents) {
             const label = [item.code, item.name, item.label, item.positionId, item.seriesId, item.repetition != null ? `Trial ${item.repetition}` : '']
+              .map(part => typeof part === 'string' ? readableEnumText(part) : part)
               .filter(Boolean).join(' - ');
             visit(item, [label, context].filter(Boolean).join(' / '), key);
           }
@@ -744,7 +756,7 @@ class ReportLayout {
           const nextContext = ['series', 'phase', 'stage', 'device', 'position'].includes(parentKey) ? context : context;
           visit(child, nextContext, key);
         } else if (key === 'series' && Array.isArray(child)) {
-          for (const series of child.filter(isObject)) visit(series, [series.label || series.seriesId || 'Series', context].filter(Boolean).join(' - '), 'series');
+          for (const series of child.filter(isObject)) visit(readableEnumText(String(series.label || series.seriesId || 'Series')), [readableEnumText(String(series.label || series.seriesId || 'Series')), context].filter(Boolean).join(' - '), 'series');
         } else if (key === 'phases' && Array.isArray(child)) {
           for (const phase of child.filter(isObject)) visit(phase, [phase.code, phase.name || phase.label, context].filter(Boolean).join(' - '), 'phase');
         }

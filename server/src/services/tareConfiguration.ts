@@ -27,3 +27,7 @@ export function applyTareConfiguration(current: Record<string, any>, input: z.in
     presetTareDevicePresent: input.presetTareDevicePresent,
   };
 }
+
+export function applyTareConfigurationAtStart(currentReportSnapshot: Record<string, any>, input: unknown) {
+  return applyTareConfiguration(currentReportSnapshot, tareConfigurationInput.parse(input));
+}

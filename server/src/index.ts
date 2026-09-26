@@ -3,6 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import mongoose from 'mongoose';
+import { connectDatabase } from './config/database.js';
+import { validateRuntimeEnvironment } from './config/runtimeEnvironment.js';
 import { authRouter } from './routes/auth.js';
 import { adminRouter } from './routes/admin.js';
 import { testReportsRouter } from './routes/testReports.js';
@@ -37,7 +39,10 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '8mb' }));
 app.use(cookieParser());
-app.get('/api/health', (_, res) => res.json({ ok: true }));
+app.get('/api/health', (_, res) => {
+  const ready = mongoose.connection.readyState === 1;
+  res.status(ready ? 200 : 503).json({ ok: ready, database: ready ? 'connected' : 'unavailable' });
+});
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/dashboard', dashboardRouter);
@@ -54,6 +59,13 @@ app.use((err: any, _req: any, res: any, _next: any) => {
   res.status(err?.status || (err?.name === 'ZodError' ? 400 : 500)).json(body);
 });
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/nawi-test-report')
-  .then(() => app.listen(port, '0.0.0.0', () => console.log(`API listening on ${port}`)))
+try {
+  validateRuntimeEnvironment();
+} catch (err) {
+  console.error('Invalid production configuration:', (err as Error).message);
+  process.exit(1);
+}
+
+connectDatabase()
+  .then(() => { app.listen(port, '0.0.0.0', () => console.log(`API listening on ${port}`)); })
   .catch(err => { console.error('MongoDB connection failed:', err.message); process.exit(1); });

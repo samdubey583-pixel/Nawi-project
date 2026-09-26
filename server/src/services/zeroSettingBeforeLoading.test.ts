@@ -3,7 +3,7 @@ import test from 'node:test';
 import { calculateChangeoverError, calculateZeroError } from './weighingCalculations.js';
 import { evaluateCompliance } from './compliance.js';
 import { getMpe } from './mpeRules.js';
-import { determineZeroBeforeLoadingProcedure, evaluateNonAutomaticZeroSettingProcedure, sourceFingerprint, sourcePhaseIsComplete, validateZeroSettingCompletion } from './zeroSettingBeforeLoading.js';
+import { determineZeroBeforeLoadingProcedure, evaluateNonAutomaticZeroSettingCompletion, evaluateNonAutomaticZeroSettingProcedure, isZeroSettingModeConfirmed, sourceFingerprint, sourcePhaseIsComplete, validateZeroSettingCompletion } from './zeroSettingBeforeLoading.js';
 
 const fixture = (zeroIndicationI0: number) => ({
   _id: 'zero-checking-fixture',
@@ -53,13 +53,31 @@ test('A.4.3 failure fixture remains a failure and is not normalized away', () =>
 });
 
 test('A.4.3 records synthetic simulation distinctly and requires explicit synthetic notes', () => {
-  assert.equal(validateZeroSettingCompletion({ confirmed: true, executionMode: 'SYNTHETIC_SIMULATION', operatorNotes: 'Synthetic prototype simulation; no physical instrument procedure performed.' }).valid, true);
-  assert.equal(validateZeroSettingCompletion({ confirmed: true, executionMode: 'SYNTHETIC_SIMULATION', operatorNotes: 'Procedure performed.' }).valid, false);
-  assert.equal(validateZeroSettingCompletion({ confirmed: false, executionMode: 'PHYSICAL' }).valid, false);
+  const synthetic = { physical: false, syntheticSimulation: true };
+  assert.equal(validateZeroSettingCompletion({ modeConfirmations: synthetic, executionMode: 'SYNTHETIC_SIMULATION', operatorNotes: 'Synthetic prototype simulation; no physical instrument procedure performed.' }).valid, true);
+  assert.equal(validateZeroSettingCompletion({ modeConfirmations: synthetic, executionMode: 'SYNTHETIC_SIMULATION', operatorNotes: 'Procedure performed.' }).valid, false);
+  assert.equal(validateZeroSettingCompletion({ modeConfirmations: { physical: true, syntheticSimulation: false }, executionMode: 'SYNTHETIC_SIMULATION', operatorNotes: 'Synthetic simulation.' }).valid, false);
+  assert.equal(validateZeroSettingCompletion({ modeConfirmations: { physical: false, syntheticSimulation: true }, executionMode: 'PHYSICAL' }).valid, false);
+  assert.equal(validateZeroSettingCompletion({ modeConfirmations: { physical: true, syntheticSimulation: false }, executionMode: 'PHYSICAL' }).valid, true);
+});
+
+test('A.4.3 mode selection and confirmation remain independent', () => {
+  const physical = { physical: true, syntheticSimulation: false };
+  const synthetic = { physical: false, syntheticSimulation: true };
+  assert.equal(isZeroSettingModeConfirmed('PHYSICAL', physical), true);
+  assert.equal(isZeroSettingModeConfirmed('SYNTHETIC_SIMULATION', physical), false);
+  assert.equal(isZeroSettingModeConfirmed('SYNTHETIC_SIMULATION', synthetic), true);
+  assert.equal(isZeroSettingModeConfirmed('PHYSICAL', synthetic), false);
 });
 
 test('A.4.3(a) evaluates each required procedural observation without inventing a measurement calculation', () => {
   const performed = { halfIntervalWeightApplied: true, indicationAlternatedAtZero: true, halfIntervalWeightRemoved: true, centreOfZeroReferenceReached: true };
   assert.deepEqual(evaluateNonAutomaticZeroSettingProcedure(performed), { complete: true, result: 'PASS' });
   assert.equal(evaluateNonAutomaticZeroSettingProcedure({ ...performed, centreOfZeroReferenceReached: false }).result, 'FAIL');
+});
+
+test('A.4.3(a) synthetic completion does not require or persist physical procedure observations', () => {
+  assert.deepEqual(evaluateNonAutomaticZeroSettingCompletion('SYNTHETIC_SIMULATION', {} as any), { complete: true, result: 'PASS' });
+  const physical = { halfIntervalWeightApplied: true, indicationAlternatedAtZero: true, halfIntervalWeightRemoved: true, centreOfZeroReferenceReached: false };
+  assert.deepEqual(evaluateNonAutomaticZeroSettingCompletion('PHYSICAL', physical), { complete: true, result: 'FAIL' });
 });

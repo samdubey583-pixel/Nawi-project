@@ -2,6 +2,7 @@ import type { InstrumentProfile, TestApplicabilityResult } from './testApplicabi
 
 export type ZeroSettingBeforeLoadingMethod = 'A.4.3(a)' | 'A.4.3(b)';
 export type ZeroSettingExecutionMode = 'PHYSICAL' | 'SYNTHETIC_SIMULATION';
+export type ZeroSettingModeConfirmations = { physical: boolean; syntheticSimulation: boolean };
 
 export type ZeroSettingProcedureObservations = {
   halfIntervalWeightApplied: boolean;
@@ -10,12 +11,23 @@ export type ZeroSettingProcedureObservations = {
   centreOfZeroReferenceReached: boolean;
 };
 
-export function validateZeroSettingCompletion(input: { confirmed: boolean; executionMode: ZeroSettingExecutionMode; operatorNotes?: string }): { valid: boolean; message?: string } {
-  if (!input.confirmed) return { valid: false, message: 'Confirm the selected A.4.3 workflow before completing it.' };
+export function isZeroSettingModeConfirmed(mode: ZeroSettingExecutionMode, confirmations: ZeroSettingModeConfirmations): boolean {
+  return mode === 'PHYSICAL' ? confirmations.physical : confirmations.syntheticSimulation;
+}
+
+export function validateZeroSettingCompletion(input: { executionMode: ZeroSettingExecutionMode; modeConfirmations: ZeroSettingModeConfirmations; operatorNotes?: string }): { valid: boolean; message?: string } {
+  if (!isZeroSettingModeConfirmed(input.executionMode, input.modeConfirmations)) {
+    return { valid: false, message: input.executionMode === 'PHYSICAL' ? 'Confirm that the physical A.4.3 procedure was performed.' : 'Confirm that the synthetic A.4.3 simulation was performed.' };
+  }
   if (input.executionMode === 'SYNTHETIC_SIMULATION' && !/synthetic|simulation|regression/i.test(input.operatorNotes || '')) {
     return { valid: false, message: 'Synthetic simulation notes must identify this as synthetic, simulation, or regression data.' };
   }
   return { valid: true };
+}
+
+export function evaluateNonAutomaticZeroSettingCompletion(mode: ZeroSettingExecutionMode, observations: ZeroSettingProcedureObservations) {
+  if (mode === 'SYNTHETIC_SIMULATION') return { complete: true, result: 'PASS' as const };
+  return evaluateNonAutomaticZeroSettingProcedure(observations);
 }
 
 export function evaluateNonAutomaticZeroSettingProcedure(observations: ZeroSettingProcedureObservations) {

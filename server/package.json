@@ -3,13 +3,17 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "test": "npm run build && node --test dist/services/mpeRules.test.js dist/services/testApplicability.test.js dist/services/testExecutionAvailability.test.js dist/services/influenceFactors.test.js dist/services/mass.test.js dist/services/weighingCalculations.test.js dist/services/zeroSettingBeforeLoading.test.js dist/services/reportMetadata.test.js dist/services/dashboard.test.js dist/services/stabilityOfEquilibrium.test.js dist/services/zeroIndicatorObservations.test.js dist/services/multipleIndicatingDevices.test.js dist/services/discrimination.test.js dist/services/tareCalculations.test.js dist/services/tareConfiguration.test.js dist/services/tareWorkflow.test.js dist/services/tareObservationWorkflow.test.js dist/services/evidenceDefinitions.test.js dist/services/evidenceSession.test.js dist/services/variationWithTime.test.js dist/services/reviewWorkflow.test.js dist/services/reportAccess.test.js dist/services/retest.test.js dist/services/reportPdf.test.js dist/services/reviewerDirectory.test.js dist/services/reviewerInstruments.test.js dist/services/reviewerRecord.test.js dist/services/notificationRead.test.js dist/services/reviewerNotificationRead.test.js dist/services/reportClassification.test.js dist/services/instrumentDeletion.test.js",
+    "build": "tsc && node scripts/build/copyDemoSeedFixture.mjs",
+    "test": "npm run build && node scripts/testing/runTests.mjs",
     "test:report-review": "npm run build && node --test dist/services/reportReview.test.js",
     "test:instrument-deletion": "npm run build && node --test dist/services/instrumentDeletion.test.js",
+    "test:demo-scope": "npm run build && node --test dist/services/demoWorkspace.test.js dist/services/reviewerWorkspaceScope.test.js",
     "start": "node dist/index.js",
-    "seed:admin": "tsx src/scripts/seedAdmin.ts",
-    "reset:test-data": "npm run build && node dist/scripts/resetTestData.js"
+    "seed:production-demo": "node dist/scripts/productionDemoSeed.js",
+    "test:production-demo-seed": "npm run build && node scripts/testing/runProductionDemoSeedTest.mjs",
+    "seed:admin": "tsx scripts/seed/seedAdmin.ts",
+    "reset:test-data": "tsx scripts/reset/resetTestData.ts",
+    "reset:tare-phase": "tsx scripts/maintenance/resetTarePhase.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

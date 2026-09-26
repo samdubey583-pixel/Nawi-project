@@ -1,30 +1,48 @@
 # NAWI Test & Report System
 
-Authentication foundation for the SIH 2026 OIML R-76 application.
+NAWI is a full-stack application for instrument registration, OIML R 76 test execution, evidence capture, report review, and report generation.
 
-## Setup
+## Application layout
 
-1. Install Node.js 20+ and MongoDB Community (or use a MongoDB Atlas URI).
-2. From the project root run `npm install`, `npm install --prefix server`, and `npm install --prefix client`.
-3. Copy `server/.env.example` to `server/.env` and set `MONGODB_URI` and a long random `JWT_SECRET`. Optionally create `client/.env` with `VITE_API_URL=http://localhost:4000/api`.
-4. Start MongoDB, then run `npm run dev` from the root. Frontend: http://localhost:5173; API: http://localhost:4000. Leave `VITE_API_URL` unset for the normal Vite same-origin `/api` proxy; do not point it at `localhost` for phone capture.
+- `client/` — React, TypeScript, and Vite application.
+- `server/` — Express, TypeScript, and MongoDB/Mongoose API.
+- `scripts/dev.mjs` — starts the active client and server development processes.
+- `server/scripts/` and `client/scripts/` — explicit seed, maintenance, reset, and test utilities.
+- `docs/` — deployment, architecture, testing, and historical QA notes.
 
-For phone evidence capture during local development, connect the phone and computer to the same Wi-Fi network. The Vite server binds to the LAN and proxies `/api` to the local API. The backend derives a private LAN address for QR codes when possible; for a fixed/reachable address, set `MOBILE_CAPTURE_BASE_URL=http://<PC-LAN-IP>:5173` in `server/.env` (do not commit a personal IP). QR generation refuses loopback-only URLs instead of producing a phone link to `localhost`.
+The active application is the root `client/` and `server/` pair. No nested duplicate application is used.
 
-Public registration always creates `TESTER`; the backend ignores any role sent by the client. Set `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, and optional name fields in `server/.env`, then run `npm run seed:admin --prefix server` to create or ensure the initial ADMIN account. Never commit that `.env` file.
+## Local development
 
-Admins use `GET /api/admin/users` and `PATCH /api/admin/users/:id` with `{ "role": "TESTER|REVIEWER|ADMIN" }` or `{ "isActive": true|false }`. These endpoints require an authenticated ADMIN. The final active ADMIN cannot be demoted or deactivated.
+Requirements: Node.js 20+ and a MongoDB instance.
 
-To verify MongoDB persistence: `mongosh`, then `use nawi-test-report`, then `db.users.find({}, {passwordHash:0}).pretty()`. Password hashes are excluded from normal queries and never returned by API responses.
+```sh
+npm run install:all
+```
 
-## Structure
+Copy `server/.env.example` to `server/.env` and set `MONGODB_URI` and a strong `JWT_SECRET`. Then start MongoDB and run:
 
-`client/src/main.tsx` contains routing, auth context, auth pages, reusable form primitives, and placeholder dashboards. `server/src` contains the Express app, User model, auth routes, and reusable auth/role middleware.
+```sh
+npm run dev
+```
 
-## Complete now
+The Vite client is served at `http://localhost:5173` and the API at `http://localhost:4000`. The Vite proxy handles `/api` in development. See [deployment preparation](docs/deployment/PREPARATION.md) for phone capture and environment details.
 
-Email/password registration and login, bcrypt hashing, normalized unique emails, HTTP-only JWT cookie sessions, logout, `/me`, protected routing, role-aware placeholder destinations, responsive accessible UI, validation/error/loading states, and reset flow placeholders.
+## Build and tests
 
-## Intentionally deferred
+```sh
+npm run build
+npm test
+```
 
-Email delivery/token persistence for password reset, admin user management, instruments, test sessions, calculations, verified OIML rules, reports, approvals, audit trails, and social login.
+`npm run build` type-checks/builds the server and client. `npm test` runs both test suites. Start the built API with `npm start` after building and configuring the server environment.
+
+## Account setup and data safety
+
+Public registration creates tester accounts; role changes require an authenticated administrator. Configure initial admin credentials through `server/.env` and run `npm run seed:admin` only when intentionally provisioning that account. Seed/reset/maintenance scripts are explicit operations and are not run on application startup. In particular, `server/scripts/reset/` contains destructive test-data utilities: inspect the script and target database before running it. Never commit `.env` files or production secrets.
+
+## Documentation
+
+- [Architecture and source map](docs/architecture/PROJECT-STRUCTURE.md)
+- [Deployment preparation](docs/deployment/PREPARATION.md)
+- [QA checkpoints](docs/testing/checkpoints/)

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, ExternalLink } from 'lucide-react';
 import axios from 'axios';
 import { Link, useSearchParams } from 'react-router-dom';
+import { evidenceFileUrl } from '../evidence/evidenceFileUrl';
 
 type Tester = { id: string; name: string; email: string; reports: unknown[] };
 
@@ -84,12 +85,12 @@ export default function ReviewerEvidenceGallery() {
       </section>
       {loadingEvidence ? <div className="reviewer-empty">Loading evidence…</div> : visibleEvidence.length ? <section className="reviewer-evidence-grid" aria-label="Evidence items">
         {visibleEvidence.map((item, index) => <article className="reviewer-evidence-card" key={item.id}>
-          {item.mimeType?.startsWith('image/') && <a className="reviewer-evidence-image-link" href={`/api${item.fileUrl}`} target="_blank" rel="noreferrer" aria-label={`Open image evidence: ${item.label}`}><img className="reviewer-evidence-preview" src={`/api${item.fileUrl}`} alt={item.label || `Evidence for ${item.reportNumber}`} loading="lazy" /></a>}
+          {item.mimeType?.startsWith('image/') && <a className="reviewer-evidence-image-link" href={evidenceFileUrl(item.fileUrl)} target="_blank" rel="noreferrer" aria-label={`Open image evidence: ${item.label}`}><img className="reviewer-evidence-preview" src={evidenceFileUrl(item.fileUrl)} alt={item.label || `Evidence for ${item.reportNumber}`} loading="lazy" /></a>}
           <span className="technical-label">Evidence {String(index + 1).padStart(2, '0')} · {item.testerName || selectedTester?.name || 'Tester not recorded'}</span>
           <h2>{item.label}</h2><p>{item.reportNumber} · {item.instrument}</p>
           <small>{item.testId || 'Report'} · {item.testerEmail || selectedTester?.email || 'Tester account not recorded'} · {new Date(item.capturedAt).toLocaleString()}</small>
           {item.caption && <small>{item.caption}</small>}
-          <a href={`/api${item.fileUrl}`} target="_blank" rel="noreferrer">Open evidence <ExternalLink size={14} /></a>
+          <a href={evidenceFileUrl(item.fileUrl)} target="_blank" rel="noreferrer">Open evidence <ExternalLink size={14} /></a>
         </article>)}
       </section> : <section className="reviewer-section"><div className="reviewer-empty">No evidence is attached to this tester’s submitted reports.</div></section>}
     </>}

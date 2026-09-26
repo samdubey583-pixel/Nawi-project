@@ -79,6 +79,21 @@ export type ApplicableRouteTest = {
   route?: string;
 };
 
+/** A route prerequisite is an applicable test with an available execution module. */
+export function isRequiredExecutableTest(test: ApplicableRouteTest): boolean {
+  return test.status === 'APPLICABLE' && test.executionSupported !== false;
+}
+
+export function incompleteExecutableTests(
+  tests: ApplicableRouteTest[],
+  states: Record<string, ExecutionState | undefined>,
+  route: 'A.4' | 'A.5',
+): ApplicableRouteTest[] {
+  return tests.filter(test => (test.route === route || test.code.startsWith(`${route}.`))
+    && isRequiredExecutableTest(test)
+    && !isTestExecutionTerminal(states[test.code]));
+}
+
 function dependencySatisfied(
   dependency: ExecutionDependency,
   states: Record<string, ExecutionState | undefined>,
@@ -104,13 +119,12 @@ export function resolveTestExecutionAvailability(
   states: Record<string, ExecutionState | undefined>,
 ): Record<string, RouteAvailabilityState> {
   const result: Record<string, RouteAvailabilityState> = {};
-  const a4Tests = tests.filter(test => test.route === 'A.4' || test.code.startsWith('A.4.'));
-  const a4Required = a4Tests.filter(test => test.status !== 'NOT_APPLICABLE');
-  const a4Incomplete = a4Required.filter(test => {
-    if (test.status !== 'APPLICABLE') return true;
-    if (test.executionSupported === false) return true;
-    return !isTestExecutionTerminal(states[test.code]);
-  });
+  // Progression tracks executable work, not whether every result passed or
+  // whether every declared test has a supported/configured module. Those
+  // unresolved configuration/support items remain explicit and continue to
+  // block final submission through review readiness.
+  const a4Incomplete = incompleteExecutableTests(tests, states, 'A.4');
+  const a5Incomplete = incompleteExecutableTests(tests, states, 'A.5');
 
   for (const test of tests) {
     if (test.status === 'NOT_APPLICABLE') {
@@ -126,7 +140,11 @@ export function resolveTestExecutionAvailability(
       continue;
     }
     if (['REQUIRES_CONFIGURATION', 'REQUIRES_CONTEXT'].includes(test.status)) {
-      result[test.code] = { state: 'CONFIGURATION_REQUIRED', reason: test.reason, dependencies: [] };
+      const dependencies = TEST_EXECUTION_DEPENDENCIES[test.code] || [];
+      const missing = dependencies.filter(dependency => !dependencySatisfied(dependency, states, tests));
+      result[test.code] = missing.length
+        ? { state: 'LOCKED', reason: missing[0].reason, dependencies: missing.map(({ code, reason }) => ({ code, reason })) }
+        : { state: 'CONFIGURATION_REQUIRED', reason: test.reason, dependencies: [] };
       continue;
     }
 
@@ -161,20 +179,10 @@ export function resolveTestExecutionAvailability(
             ? `${item.code} has no supported execution module yet.`
             : `${item.code} must reach a terminal PASS or FAIL result.`,
         })),
+        ...a5Incomplete.map(item => ({ code: item.code, reason: `${item.code} must reach a terminal PASS or FAIL result.` })),
         ...(a5 ? [{ code: 'A.5', reason: 'A.5 must reach a terminal PASS or FAIL result.' }] : []),
         { code: 'A.4.4 baseline', reason: 'A.4.4 must contain a completed observation suitable for the pre-endurance baseline.' },
       ];
-    }
-
-    const routeBlocker = (test.code === 'A.5' || test.code === 'A.6')
-      ? a4Incomplete.find(item => item.status !== 'APPLICABLE' || item.executionSupported === false)
-      : undefined;
-    if (routeBlocker) {
-      const reason = routeBlocker.executionSupported === false
-        ? `${routeBlocker.code} has no supported execution module yet.`
-        : routeBlocker.reason || `${routeBlocker.code} requires configuration before route completion.`;
-      result[test.code] = { state: 'LOCKED', reason, dependencies: [{ code: routeBlocker.code, reason }] };
-      continue;
     }
 
     const missing = dependencies.filter(dependency => !dependencySatisfied(dependency, states, tests));

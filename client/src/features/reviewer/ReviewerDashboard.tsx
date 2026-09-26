@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertCircle, ArrowRight, ClipboardList, FileCheck2, MessageSquare, Users } from 'lucide-react';
 import axios from 'axios';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { reviewerNotificationTesterName, reviewerSelectionStorageKey } from './reviewerSelection';
 
 const dateLabel = (value: unknown) => value ? new Date(String(value)).toLocaleString() : 'Not recorded';
 const messageDisplayText = (message: any) => {
@@ -12,7 +13,7 @@ const messageDisplayText = (message: any) => {
   return message.message;
 };
 
-export default function ReviewerDashboard() {
+export default function ReviewerDashboard({ reviewerId }: { reviewerId?: string }) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
   const [notificationBusy, setNotificationBusy] = useState('');
@@ -20,11 +21,12 @@ export default function ReviewerDashboard() {
   const [searchParams] = useSearchParams();
   const urlTesterId = searchParams.get('testerId') || '';
   const choosingTester = searchParams.get('chooseTester') === '1';
-  const selectedTesterId = urlTesterId || (choosingTester ? '' : window.sessionStorage.getItem('nawi.reviewer.selectedTesterId') || '');
+  const selectionKey = reviewerSelectionStorageKey(reviewerId);
+  const selectedTesterId = urlTesterId || (choosingTester ? '' : window.sessionStorage.getItem(selectionKey) || '');
   useEffect(() => {
-    if (urlTesterId) window.sessionStorage.setItem('nawi.reviewer.selectedTesterId', urlTesterId);
-    else if (choosingTester) window.sessionStorage.removeItem('nawi.reviewer.selectedTesterId');
-  }, [urlTesterId, choosingTester]);
+    if (urlTesterId) window.sessionStorage.setItem(selectionKey, urlTesterId);
+    else if (choosingTester) window.sessionStorage.removeItem(selectionKey);
+  }, [urlTesterId, choosingTester, selectionKey]);
   const context = selectedTesterId ? `?testerId=${encodeURIComponent(selectedTesterId)}` : '';
   const load = async () => { try { const [reportsResponse, testersResponse, notificationsResponse] = await Promise.all([axios.get(`/reviewer/reports${context}`), axios.get('/reviewer/testers'), axios.get(`/reviewer/notifications${context}`)]); setData({ ...reportsResponse.data, testers: testersResponse.data.testers || [], notifications: notificationsResponse.data.notifications || [] }); setError(''); } catch (e: any) { setError(e.response?.data?.message || 'Unable to load the reviewer workspace.'); } };
   useEffect(() => { void load(); }, [context]);
@@ -66,7 +68,7 @@ export default function ReviewerDashboard() {
       {queue.length ? <div className="reviewer-list">{queuePreview.map((item: any) => <ReviewQueueCard item={item} key={item.id} />)}</div> : <div className="reviewer-empty">No submitted reports are waiting for review.</div>}
       {!fullReportsView && queue.length > 5 && <Link className="dashboard-more" to={`/reviewer/reports?testerId=${selectedTesterId}`}>View all reports <ArrowRight size={15} /></Link>}
     </section>}
-    {notifications.length > 0 && <section className="reviewer-section reviewer-notification-panel"><div className="reviewer-section-heading"><div><span className="technical-label">NOTIFICATIONS</span><h2>Tester activity</h2></div><span>{notifications.filter((item: any) => item.unread).length ? `${notifications.filter((item: any) => item.unread).length} unread` : `${notifications.length} recent`}</span></div><div className="reviewer-notification-list">{notifications.slice(0, 8).map((item: any) => <article className={`reviewer-notification-item ${String(item.type || '').toLowerCase()}${item.unread ? ' unread' : ''}`} key={item.id}><Link className="reviewer-notification-link" to={item.path}><span className="reviewer-notification-icon">{item.type === 'MESSAGE' ? <MessageSquare size={17} /> : <AlertCircle size={17} />}</span><span><strong>{item.title}</strong><small>{item.reportId} · {item.testerName || 'Tester'} · {dateLabel(item.createdAt)}</small><p>{messageDisplayText({ message: item.message, status: item.status })}</p></span><ArrowRight size={16} /></Link>{item.unread && <button type="button" className="reviewer-notification-read" disabled={notificationBusy === item.id} onClick={() => void markNotificationRead(item)}>{notificationBusy === item.id ? 'Saving…' : 'Mark read'}</button>}</article>)}</div></section>}
+    {notifications.length > 0 && <section className="reviewer-section reviewer-notification-panel"><div className="reviewer-section-heading"><div><span className="technical-label">NOTIFICATIONS</span><h2>Tester activity</h2></div><span>{notifications.filter((item: any) => item.unread).length ? `${notifications.filter((item: any) => item.unread).length} unread` : `${notifications.length} recent`}</span></div><div className="reviewer-notification-list">{notifications.slice(0, 8).map((item: any) => <article className={`reviewer-notification-item ${String(item.type || '').toLowerCase()}${item.unread ? ' unread' : ''}`} key={item.id}><Link className="reviewer-notification-link" to={item.path}><span className="reviewer-notification-icon">{item.type === 'MESSAGE' ? <MessageSquare size={17} /> : <AlertCircle size={17} />}</span><span><strong>{item.title}</strong><small>{item.reportId} · {reviewerNotificationTesterName(item.testerName, hasContext ? selectedTester : undefined)} · {dateLabel(item.createdAt)}</small><p>{messageDisplayText({ message: item.message, status: item.status })}</p></span><ArrowRight size={16} /></Link>{item.unread && <button type="button" className="reviewer-notification-read" disabled={notificationBusy === item.id} onClick={() => void markNotificationRead(item)}>{notificationBusy === item.id ? 'Saving…' : 'Mark read'}</button>}</article>)}</div></section>}
     {messages.length > 0 && (!fullReportsView || hasContext) && <section className="reviewer-section"><div className="reviewer-section-heading"><div><span className="technical-label">AUTHORITY COMMUNICATION</span><h2>Latest messages</h2></div><span>{messages.length} recent</span></div><div className="reviewer-message-list">{messages.slice(0, 5).map((message: any) => <Link className="reviewer-dashboard-message" to={`/reviewer/reports/${message.reportNumber}`} key={message.id}><div><strong>{message.subject}</strong><small>{message.senderNameSnapshot} · {message.senderRole} · {dateLabel(message.createdAt)}</small></div><p>{messageDisplayText(message)}</p><small>{message.reportNumber} · {String(message.status).replace(/_/g, ' ')}</small></Link>)}</div></section>}
     {hasContext && !!(data.recentDecisions || []).length && <section className="reviewer-section"><div className="reviewer-section-heading"><div><span className="technical-label">DECISION HISTORY</span><h2>Recent decisions</h2></div></div><div className="reviewer-list">{decisionsPreview.map((item: any) => <ReviewQueueCard item={item} key={item.id} />)}</div>{!fullReportsView && data.recentDecisions.length > 5 && <Link className="dashboard-more" to={`/reviewer/reports?testerId=${selectedTesterId}`}>View all decisions <ArrowRight size={15} /></Link>}</section>}
   </main>;

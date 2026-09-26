@@ -66,12 +66,24 @@ test('tare may consume terminal A.4 outcomes including FAIL, but not stale or un
   assert.equal(resolveTestExecutionAvailability(withTare, { ...states, 'A.4.3': { status: 'COMPLETED', stale: true } })['A.4.6'].state, 'LOCKED');
 });
 
+test('tare configuration is reachable only after its required source tests are resolved', () => {
+  const configuredTare = [...tests, { code: 'A.4.6', route: 'A.4' as const, status: 'REQUIRES_CONFIGURATION' }];
+  const readySources = {
+    'A.4.2': { status: 'COMPLETED', result: 'PASS' },
+    'A.4.3': { status: 'COMPLETED', result: 'PASS' },
+    'A.4.4': { status: 'COMPLETED', result: 'PASS' },
+    'A.4.5': { status: 'NOT_APPLICABLE' },
+  };
+  assert.equal(resolveTestExecutionAvailability(configuredTare, readySources)['A.4.6'].state, 'CONFIGURATION_REQUIRED');
+  assert.equal(resolveTestExecutionAvailability(configuredTare, { ...readySources, 'A.4.4': undefined })['A.4.6'].state, 'LOCKED');
+});
+
 test('A.4.10 requires a real A.4.4 zero reference, not a passing result', () => {
   assert.equal(resolveTestExecutionAvailability(tests, { 'A.4.4 zero reference': { sourceAvailable: false } })['A.4.10'].state, 'LOCKED');
   assert.equal(resolveTestExecutionAvailability(tests, { 'A.4.4 zero reference': { sourceAvailable: true } })['A.4.10'].state, 'READY');
 });
 
-test('A.5 waits for all required A.4 outcomes; N/A is excluded and unsupported remains blocking', () => {
+test('A.5 waits for all required executable A.4 outcomes; FAIL is terminal and N/A is excluded', () => {
   const terminalStates: Record<string, ExecutionState> = Object.fromEntries(
     tests.filter(item => item.route === 'A.4' && item.status === 'APPLICABLE')
       .map(item => [item.code, { status: 'COMPLETED', result: item.code === 'A.4.8' ? 'FAIL' : 'PASS' }]),
@@ -81,17 +93,31 @@ test('A.5 waits for all required A.4 outcomes; N/A is excluded and unsupported r
   delete unfinished['A.4.11'];
   assert.equal(resolveTestExecutionAvailability(tests, unfinished)['A.5'].state, 'LOCKED');
   const unsupported = tests.map(item => item.code === 'A.4.11' ? { ...item, status: 'UNSUPPORTED' } : item);
-  assert.equal(resolveTestExecutionAvailability(unsupported, terminalStates)['A.5'].state, 'LOCKED');
+  assert.equal(resolveTestExecutionAvailability(unsupported, terminalStates)['A.5'].state, 'READY');
+  assert.equal(resolveTestExecutionAvailability(unsupported, terminalStates)['A.4.11'].state, 'UNSUPPORTED');
 });
 
-test('A.6 requires A.5 and a completed pre-endurance A.4.4 baseline', () => {
+test('A.6 unlocks after a terminal A.5 FAIL and valid baseline, but not while A.5 is incomplete', () => {
   const states: Record<string, ExecutionState> = Object.fromEntries(
     tests.filter(item => item.route === 'A.4' && item.status === 'APPLICABLE').map(item => [item.code, { status: 'COMPLETED' }]),
   );
   assert.equal(resolveTestExecutionAvailability(tests, states)['A.6'].state, 'LOCKED');
-  states['A.5'] = { status: 'COMPLETED' };
+  states['A.5'] = { status: 'IN_PROGRESS' };
   states['A.4.4 baseline'] = { status: 'COMPLETED', sourceAvailable: true };
+  assert.equal(resolveTestExecutionAvailability(tests, states)['A.6'].state, 'LOCKED');
+  states['A.5'] = { status: 'COMPLETED', result: 'FAIL' };
   assert.equal(resolveTestExecutionAvailability(tests, states)['A.6'].state, 'READY');
+});
+
+test('A.5 may proceed past unresolved non-executable configuration, but incomplete executable A.4 work still blocks it', () => {
+  const mixed = tests.map(item => item.code === 'A.4.7'
+    ? { ...item, status: 'REQUIRES_CONFIGURATION', executionSupported: false, reason: 'Set support configuration.' }
+    : item);
+  const completed = Object.fromEntries(mixed.filter(item => item.route === 'A.4' && item.status === 'APPLICABLE' && item.executionSupported !== false)
+    .map(item => [item.code, { status: 'COMPLETED', result: item.code === 'A.4.8' ? 'FAIL' : 'PASS' }]));
+  assert.equal(resolveTestExecutionAvailability(mixed, completed)['A.5'].state, 'READY');
+  delete completed['A.4.11'];
+  assert.equal(resolveTestExecutionAvailability(mixed, completed)['A.5'].state, 'LOCKED');
 });
 
 test('revalidation overrides a historical FAIL result and remains blocking', () => {

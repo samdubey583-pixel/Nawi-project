@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { ArrowLeft, Check, Download, LogOut, Send } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Download, LogOut, Send } from 'lucide-react';
 import axios from 'axios';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { downloadBlob } from '../../lib/downloadBlob';
@@ -46,6 +46,7 @@ export default function FinalReportWorkspace() {
   };
 
   const submitForReview = async () => {
+    if (!canSubmit) return;
     setBusy(true); setError(''); setConfirmSubmit(false);
     try {
       await axios.post(`/test-reports/${reportId}/review/submit`);
@@ -89,7 +90,7 @@ export default function FinalReportWorkspace() {
   const attentionTests = data.attentionTests || [];
   const retestReady = retestRequired && ['COMPLETED', 'PASS', 'FAIL'].includes(String(data.retestRequest?.currentTest?.status)) && ['PASS', 'FAIL'].includes(String(data.retestRequest?.currentTest?.result));
   const canSubmit = !closed && !retestRequired && !data.readinessError && pendingTests.length === 0 && attentionTests.length === 0;
-  const canDownload = submitted || finalized;
+  const canDownload = finalized || ['DRAFT', 'SUBMITTED', 'VERIFICATION_IN_PROGRESS', 'VERIFICATION_COMPLETED', 'TESTING', 'AWAITING_REVIEW', 'UNDER_REVIEW', 'CHANGES_REQUESTED', 'RETEST_REQUIRED', 'REJECTED'].includes(String(report.status));
   const overall = data.overallResult || 'INCOMPLETE';
   const overallClass = String(overall).toLowerCase();
 
@@ -125,6 +126,7 @@ export default function FinalReportWorkspace() {
             ['Max', mass(report.instrument?.max, unit)], ['e / d', `${mass(report.instrument?.e, unit)} / ${mass(report.instrument?.d, unit)}`], ['Unit', unit],
             ['Laboratory', report.laboratory?.name], ['Tester', report.laboratory?.testerName || report.testerNameSnapshot],
             ['Test dates', `${dateTime(report.laboratory?.testStartDate)} → ${dateTime(report.laboratory?.testEndDate)}`],
+            ['End-condition basis', report.testConditionsMode === 'SYNTHETIC_DEMO' ? 'Synthetic demo profile · copied from recorded start conditions' : report.testConditionsMode === 'OBSERVED' ? 'Observed session-end readings' : 'Not recorded'],
           ]} />
         </ReviewSection>
 
@@ -141,10 +143,11 @@ export default function FinalReportWorkspace() {
         </ReviewSection>
 
         <ReviewSection title="Validation before submission" meta={closed ? 'Read-only' : canSubmit ? 'Ready' : 'Action required'}>
-          {closed ? <div className="review-validation-ok"><Check size={17} /> This report is read-only after submission or reviewer closure.</div> : canSubmit ? <div className="review-validation-ok"><Check size={17} /> All applicable test and report prerequisites are ready for submission.</div> : <div className="review-validation-list">
-            {data.readinessError && <p><strong>Test conditions:</strong> {data.readinessError}</p>}
+          {closed ? <div className="review-validation-ok"><Check size={17} /> This report is read-only after submission or reviewer closure.</div> : canSubmit ? <div className="review-validation-ok"><Check size={17} /> Ready for submission. All applicable test and report prerequisites are complete.</div> : <div className="review-validation-list">
+            {data.readinessError && !((pendingTests.length && String(data.readinessError).startsWith('Complete all applicable tests')) || (attentionTests.length && String(data.readinessError).includes('requires attention before final review'))) && <p><strong>Action required:</strong> {data.readinessError}</p>}
             {pendingTests.length > 0 && <p><strong>Incomplete tests:</strong> {pendingTests.map((item: any) => `${item.code} ${item.name || ''}`).join(', ')}</p>}
             {attentionTests.length > 0 && <p><strong>Attention required:</strong> {attentionTests.map((item: any) => `${item.code} ${item.reason || item.name || 'review the test record'}`).join(', ')}</p>}
+            {String(data.readinessError || '').startsWith('Complete Test Conditions') && <Link className="report-secondary review-conditions-link" to={`/tester/reports/${reportId}/test-conditions`}>Complete Test Conditions <ArrowRight size={16} /></Link>}
           </div>}
         </ReviewSection>
 
@@ -154,13 +157,13 @@ export default function FinalReportWorkspace() {
 
         {endurance && <ReviewSection title="A.6 endurance summary" meta={prototype ? 'Prototype workflow' : endurance.status}>
           <div className="review-fields">
-            <SummaryMetric label="Applications" value={`${Number(endurance.completedCycles || 0).toLocaleString('en-IN')} / ${Number(endurance.targetCycles || 100000).toLocaleString('en-IN')}`} />
-            <SummaryMetric label="Synthetic applications" value={Number(endurance.syntheticCycles || 0).toLocaleString('en-IN')} />
-            <SummaryMetric label="Pre-endurance baseline" value={`${valueOrDash(endurance.preWeighing?.sourceObservationId)} · ${mass(endurance.preWeighing?.correctedErrorEc, unit)}`} />
-            <SummaryMetric label="Post-endurance error" value={mass(endurance.postWeighing?.Ec, unit)} />
-            <SummaryMetric label="Durability result" value={endurance.durabilityAssessment?.result} />
-            <SummaryMetric label="Abnormal events" value={(endurance.events || []).filter((item: any) => String(item.action || '').toLowerCase().includes('abnormal')).length} />
-            <SummaryMetric label="Recovery checkpoints" value={(endurance.checkpoints || []).length} />
+            <SummaryMetric tone="light" label="Applications" value={`${Number(endurance.completedCycles || 0).toLocaleString('en-IN')} / ${Number(endurance.targetCycles || 100000).toLocaleString('en-IN')}`} />
+            <SummaryMetric tone="light" label="Synthetic applications" value={Number(endurance.syntheticCycles || 0).toLocaleString('en-IN')} />
+            <SummaryMetric tone="light" label="Pre-endurance baseline" value={`${valueOrDash(endurance.preWeighing?.sourceObservationId)} · ${mass(endurance.preWeighing?.correctedErrorEc, unit)}`} />
+            <SummaryMetric tone="light" label="Post-endurance error" value={mass(endurance.postWeighing?.Ec, unit)} />
+            <SummaryMetric tone="light" label="Durability result" value={endurance.durabilityAssessment?.result} />
+            <SummaryMetric tone="light" label="Abnormal events" value={(endurance.events || []).filter((item: any) => String(item.action || '').toLowerCase().includes('abnormal')).length} />
+            <SummaryMetric tone="light" label="Recovery checkpoints" value={(endurance.checkpoints || []).length} />
           </div>
           {prototype && <p className="report-prototype-copy">Synthetic endurance counts remain clearly classified as prototype regression data.</p>}
         </ReviewSection>}
@@ -185,18 +188,18 @@ export default function FinalReportWorkspace() {
         <div className="handoff-action-buttons">
           {retestRequired && <button className="report-primary" onClick={() => nav(retestRoute(reportId, data.retestRequest.testCode))}><Send size={16} /> Review Retest Request</button>}
           {retestRequired && retestReady && <button className="report-secondary" onClick={() => void submitRetest()} disabled={busy}><Send size={16} /> Submit Retest</button>}
-          {!closed && !retestRequired && <button className="report-primary" onClick={() => setConfirmSubmit(true)} disabled={busy}><Send size={16} /> Submit for Review</button>}
+          {!closed && !retestRequired && <button className="report-primary" onClick={() => setConfirmSubmit(true)} disabled={busy || !canSubmit}><Send size={16} /> Submit for Review</button>}
           {canDownload && <button className="report-secondary pdf-download-action" onClick={() => void downloadPdf()} disabled={busy}><Download size={16} /> {busy ? 'Preparing…' : finalized ? 'Download Final PDF' : 'Download Draft PDF'}</button>}
           <button className="report-tertiary" onClick={() => nav('/tester/dashboard')}><ArrowLeft size={16} /> Go to Dashboard</button>
         </div>
       </section>
 
-      {confirmSubmit && <div className="report-confirm-backdrop" role="presentation"><div className="report-confirm" role="dialog" aria-modal="true" aria-labelledby="submit-report-title"><span className="technical-label">SUBMIT REPORT FOR REVIEW</span><h2 id="submit-report-title">Send this report to the reviewing authority?</h2>{prototype && <p className="report-prototype-copy">This report is classified as synthetic prototype / regression data. Its result is based on the persisted test calculations.</p>}{!canSubmit && <p className="report-validation-copy">The server will not accept submission yet: {data.readinessError || (pendingTests.length ? `${pendingTests.length} applicable test(s) remain.` : 'a report prerequisite requires attention.')}</p>}<p>The backend remains authoritative and will confirm or reject the transition.</p><div><button className="report-secondary" onClick={() => setConfirmSubmit(false)}>Cancel</button><button className="report-primary" onClick={() => void submitForReview()} disabled={busy}>Submit for Review <Send size={16} /></button></div></div></div>}
+      {confirmSubmit && <div className="report-confirm-backdrop" role="presentation"><div className="report-confirm" role="dialog" aria-modal="true" aria-labelledby="submit-report-title"><span className="technical-label">SUBMIT REPORT FOR REVIEW</span><h2 id="submit-report-title">Send this report to the reviewing authority?</h2>{prototype && <p className="report-prototype-copy">This report is classified as synthetic prototype / regression data. Its result is based on the persisted test calculations.</p>}<p>The backend remains authoritative and will confirm or reject the transition.</p><div><button className="report-secondary" onClick={() => setConfirmSubmit(false)}>Cancel</button><button className="report-primary" onClick={() => void submitForReview()} disabled={busy || !canSubmit}>Submit for Review <Send size={16} /></button></div></div></div>}
     </section>
   </main>;
 }
 
-function SummaryMetric({ label, value }: { label: string; value: unknown }) { return <div className="review-summary-metric"><small>{label}</small><strong>{valueOrDash(value)}</strong></div>; }
+function SummaryMetric({ label, value, tone = 'dark' }: { label: string; value: unknown; tone?: 'dark' | 'light' }) { return <div className={`review-summary-metric review-summary-metric-${tone}`}><small>{label}</small><strong>{valueOrDash(value)}</strong></div>; }
 function retestRoute(reportId: string, code: string) { const routes: Record<string, string> = { 'A.4.2': 'a4-2', 'A.4.3': 'a4-3', 'A.4.4': 'a4-4', 'A.4.5': 'a4-5', 'A.4.6': 'a4-6', 'A.4.7': 'a4-7', 'A.4.8': 'a4-8', 'A.4.9': 'a4-9', 'A.4.10': 'a4-10', 'A.4.11': 'a4-11', 'A.4.12': 'a4-12' }; if (code === 'A.5') return `/tester/reports/${reportId}/influence-factors`; if (code === 'A.6') return `/tester/reports/${reportId}/endurance`; return `/tester/reports/${reportId}/testing/${routes[code] || ''}`; }
 function ReviewSection({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) { return <section className="review-section"><div className="review-section-heading"><h2>{title}</h2><span>{valueOrDash(meta)}</span></div>{children}</section>; }
 function SummaryGrid({ items }: { items: Array<[string, unknown]> }) { return <div className="review-fields">{items.map(([label, value]) => <div className="review-field" key={label}><small>{label}</small><strong>{valueOrDash(value)}</strong></div>)}</div>; }

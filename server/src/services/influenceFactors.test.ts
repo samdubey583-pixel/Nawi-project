@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateInfluenceFactorsError, evaluateInfluenceFactors, evaluateInfluenceFactorsCompliance, influenceFactorsFingerprint, recalculateSavedTiltingObservation, temperaturePlan, validateWarmUpAttestation, validateVoltageObservationCoverage, voltageLimits, VOLTAGE_SEQUENCE_LABELS, type InfluenceFactorSnapshot } from './influenceFactors.js';
+import { calculateInfluenceFactorsError, evaluateInfluenceFactors, evaluateInfluenceFactorsCompliance, influenceFactorsFingerprint, recalculateSavedTiltingObservation, temperaturePlan, validateWarmUpAttestation, validateVoltageObservationCoverage, validateVoltageObservationReadings, voltageLimits, VOLTAGE_SEQUENCE_LABELS, type InfluenceFactorSnapshot } from './influenceFactors.js';
 import { calculateChangeoverError } from './weighingCalculations.js';
 
 const profile = (overrides: Partial<InfluenceFactorSnapshot> = {}): InfluenceFactorSnapshot => ({ accuracyClass: 'III', indicationType: 'Self-indicating', unit: 'g', min: 200, max: 30000, e: 10, d: 10, usesElectricPower: true, powerSourceType: 'AC_MAINS', nominalVoltage: 230, tiltConfiguration: true, mobileInstrument: false, portableRoadVehicleInstrument: false, specifiedMinimumTemperature: -10, specifiedMaximumTemperature: 40, ...overrides });
@@ -76,6 +76,26 @@ test('A.5.4 requires both OIML load conditions across the complete voltage seque
   assert.equal(validateVoltageObservationCoverage(observations.map(item => item.loadCondition === 'HALF_MAX_TO_MAX' ? { ...item, load: 29999 } : item), { max: 60000, e: 20 }).valid, false);
 });
 
+test('A.5.4 rejects operated voltage observations missing any calculation input', () => {
+  const base = { label: 'REFERENCE_START', loadCondition: '10E' as const, functionBehavior: 'OPERATED' as const, indication: 10, deltaL: 0.5, zeroError: 0 };
+  for (const incomplete of [
+    { ...base, indication: undefined },
+    { ...base, deltaL: undefined },
+    { ...base, zeroError: undefined },
+  ]) {
+    const result = validateVoltageObservationReadings([incomplete]);
+    assert.equal(result.valid, false);
+    if (!result.valid) assert.match(result.message, /requires an indication, ΔL, and E₀/i);
+  }
+});
+
+test('A.5.4 accepts complete operated readings including zero E₀ and permits switched-off readings without calculations', () => {
+  assert.deepEqual(validateVoltageObservationReadings([
+    { label: 'REFERENCE_START', loadCondition: '10E', functionBehavior: 'OPERATED', indication: 10, deltaL: 0.5, zeroError: 0 },
+    { label: 'LOWER', loadCondition: '10E', functionBehavior: 'SWITCHED_OFF' },
+  ]), { valid: true });
+});
+
 test('A.5 MPE comparison absorbs only floating-point noise at the load scale', () => {
   const snapshot = profile({ accuracyClass: 'I', min: 1, max: 1000, e: 0.1, unit: 'g' });
   assert.equal(evaluateInfluenceFactorsCompliance(snapshot, 500, 'g', 0.05000000000001137).compliance, 'PASS');
@@ -108,6 +128,26 @@ test('treats an empty marked-voltage object as absent configuration', () => {
     influenceFactorsFingerprint(profile({ specifiedVoltageRange: {} })),
     influenceFactorsFingerprint(profile()),
   );
+});
+
+test('A.4-only report fields do not invalidate the A.5 source fingerprint', () => {
+  const unchangedA5Profile = profile();
+  const reportAfterA46Setup = {
+    ...unchangedA5Profile,
+    tareDevicePresent: true,
+    tareType: 'SUBTRACTIVE',
+    maximumTareEffect: { value: 10000, unit: 'g' },
+    tareOperationMode: 'NON_AUTOMATIC',
+    tareWeighingDevicePresent: false,
+    presetTareDevicePresent: false,
+    additionalInformation: 'Report metadata changed outside A.5.',
+  } as InfluenceFactorSnapshot & Record<string, unknown>;
+  assert.equal(influenceFactorsFingerprint(reportAfterA46Setup), influenceFactorsFingerprint(unchangedA5Profile));
+});
+
+test('A.5 source fingerprint still changes when an A.5-relevant instrument condition changes', () => {
+  assert.notEqual(influenceFactorsFingerprint(profile()), influenceFactorsFingerprint(profile({ specifiedMaximumTemperature: 45 })));
+  assert.notEqual(influenceFactorsFingerprint(profile()), influenceFactorsFingerprint(profile({ nominalVoltage: 220 })));
 });
 
 test('temperature targets include 5 °C only when the specified low is at or below zero', () => {
