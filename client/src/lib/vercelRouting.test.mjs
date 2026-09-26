@@ -4,10 +4,10 @@ import test from 'node:test';
 
 const config = JSON.parse(await readFile(new URL('../../../vercel.json', import.meta.url), 'utf8'));
 
-test('Vercel installs and builds the client package from the repository root', () => {
-  assert.equal(config.installCommand, 'npm ci --prefix client');
-  assert.equal(config.buildCommand, 'npm run build --prefix client');
-  assert.equal(config.outputDirectory, 'client/dist');
+test('Vercel build settings remain controlled by the client-root project configuration', () => {
+  assert.equal('installCommand' in config, false);
+  assert.equal('buildCommand' in config, false);
+  assert.equal('outputDirectory' in config, false);
 });
 
 test('Vercel proxies API paths to the configurable Render origin with /api preserved', () => {
